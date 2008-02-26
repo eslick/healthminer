@@ -12,4 +12,4 @@
 		 (:file "csv-import"))
     :serial t
     :in-order-to ((load-op (compile-op :utils)))
-    :depends-on (:utils :cl-memcached :cl-json))
+    :depends-on (:utils :cl-json))

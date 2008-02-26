@@ -82,7 +82,7 @@
   ((questions :accessor questions :initarg :questions)
    (responses :accessor responses :initarg :responses)
    (source-file :accessor source-file :initarg :file)
-   (record-count :accessor record-count :initarg :record-count)))
+   (record-count :accessor record-count :initarg :record-count :initform nil)))
 
 (defmethod initialize-instance :after ((sd survey-data) &rest args)
   (when (slot-boundp sd 'source-file)
@@ -147,7 +147,14 @@
 
 (defmethod initialize-instance :after ((sm survey-model) &rest args)
   (declare (ignore args))
-  (setf (fields sm) (make-fields sm)))
+  (setf (fields sm) (make-fields sm))
+  #+allegro (excl::gc t)
+  (loop for field in (fields sm) do
+        (when (eq (field-type field) :multi)
+	  (loop for response in (responses sm) do
+	       (setf (nth (field-id field) response)
+		     (extract-multiple-value-line 
+		      (nth (field-id field) response)))))))
 
 (defmethod make-fields ((sm survey-data))
   (setf (fields sm)
@@ -155,12 +162,78 @@
 	   collecting (make-field offset sm))))
 
 ;;
-;; Methods to index and query the data
+;; Methods to query the data
 ;;
 
+(defun survey-questions (survey-model)
+  (loop 
+     for q in (questions survey-model) 
+     for i from 0 do
+       (format t "~A: ~A~%" i q)))
 
-	 
-       
+;; Zuoyuy: this is a quick hack to illustrate some of the details; should be 
+;; cleaned up to support the query types and graph types we want to enable.  
+;; Get json data format input from John...
 
 
+(defun json-percent-distribution (sm field-id)
+  (json:encode-json-alist-to-string
+   (canonical-response-distribution sm field-id)))
+
+(defun canonical-response-distribution (sm field-id)
+  (sorted-alist
+   (normalize-alist-series
+    (response-distribution sm field-id))))
+
+(defun response-distribution (sm field-id)
+  "Returns an alist of value occurances to a given question"
+  (let ((hash (make-hash-table :test #'equal))
+	(field (nth field-id (fields sm)))
+	(total 0)
+	(responses 0))
+    ;; Not sure how to handle the overlap distribution of a multi-valued response
+    ;; Each response entry is a list for field types = :multi
+    (assert (eq (field-type field) :single))
+    (format t "Computing the distribution of responses to: ~A~%With possible values:"
+	    (field-question field))
+    ;; Init entries
+    (mapc (lambda (value)
+	    (print value)
+	    (setf (gethash value hash) 0))
+	  (field-values field))
+    ;; Count responses
+    (loop for response in (responses sm) do
+	 (let ((value (nth field-id response)))
+	   (incf total)
+	   (when value
+	     (incf responses)
+	     (incf (gethash value hash)))))
+    (values (hash-items hash) (/ responses total))))
+
+
+;; Some alist as series helpers
+
+(defun sorted-alist (alist &optional (pred #'<))
+  (sort alist pred :key #'cdr))
+
+(defun normalize-alist-series (alist)
+  "take an alist (x-label . value) and normalize values"
+  (let ((total (apply #'+ (cdrs alist))))
+    (mapcar #'(lambda (pair)
+		(cons (car pair) (coerce (/ (cdr pair) total) 'float)))
+	    alist)))
+
+;; Example run
+
+;; Build the model
+; (setf model (make-instance 'survey-model :file "filename"))
+
+;; See survey questions
+; (survey-questions model)
+
+;; Pick a question
+; (canonical-response-distribution model 8)
+
+;; In serialized format for Java!
+; (json-percent-distribution model 8)
 		   
