@@ -1,4 +1,2 @@
-(in-package :cl-user)
-
-(defpackage smart 
+(defpackage :lamsight
   (:use :cl :utils))
