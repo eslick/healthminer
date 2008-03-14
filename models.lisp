@@ -3,7 +3,7 @@
 (in-package :lamsight)
 
 (defparameter *django-settings-module* "lamsight.settings")
-(defparameter *lamsight-path* "/Users/eslick/Work/lamsight/")
+(defparameter *lamsight-path* "/Users/eslick/Work/newmed/lamsight/")
 (defparameter *lisp-models-path* (concatenate 'string *lamsight-path* "lisp_models.py"))
 
 (defun setup-model-import ()

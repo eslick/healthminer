@@ -185,6 +185,9 @@
    (normalize-alist-series
     (response-distribution sm field-id))))
 
+(defun get-field-question (sm field-id)
+  (field-question (nth field-id (fields sm))))
+
 (defun response-distribution (sm field-id)
   "Returns an alist of value occurances to a given question"
   (let ((hash (make-hash-table :test #'equal))
@@ -194,11 +197,11 @@
     ;; Not sure how to handle the overlap distribution of a multi-valued response
     ;; Each response entry is a list for field types = :multi
     (assert (eq (field-type field) :single))
-    (format t "Computing the distribution of responses to: ~A~%With possible values:"
-	    (field-question field))
+;;    (format t "Computing the distribution of responses to: ~A~%With possible values:"
+;;	    (field-question field))
     ;; Init entries
     (mapc (lambda (value)
-	    (print value)
+;;	    (print value)
 	    (setf (gethash value hash) 0))
 	  (field-values field))
     ;; Count responses
