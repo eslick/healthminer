@@ -64,4 +64,5 @@
    (mapcar (lambda (pair)
 	     (cons (car pair) (ceiling (* 100 (cdr pair)))))
 	   (let ((response (canonical-response-distribution *model* i)))
-	     (subseq response 0 (min (length response) 4))))))
+	     response))))
+;;	     (subseq response 0 (min (length response) 4))))))
