@@ -49,7 +49,7 @@
 (defpage main-page "" 
   (with-template "Main Demo"
     (:p "This is a simple test")
-    (:form :action "https://lamsight-dev.media.mit.edu/servlets-examples/servlet/SimpleHello5" 
+    (:form :action "http://lamsight-dev.media.mit.edu/render/servlet/Renderer2" 
 	   :method "post"
 	   (:label "Foo")
 	   (:select :name "json"
@@ -63,16 +63,37 @@
     (:p "This is a test")))
 
 (defparameter test-dataset 
-  '(("Bob" . 81) ("Joe" . 82) ("Kathy" . 83)))
+  '(("Bob's" . 81) ("Joe" . 82) ("Kathy" . 83)))
 
 (defun json-dataset (dataset)
   (json:encode-json-alist-to-string
-   `(("GraphName" . "Webdesign Data")
+   `(("GraphName" . "Experience of Respondents")
      ("GraphType" . "BarGraph")
      ("GraphTemplate" . 1)
-     ("Xlabel" . "People")
-     ("Ylabel" . "Scores")
-     ("data" ,@dataset))))
+     ("Xlabel" . "Years")
+     ("Ylabel" . "Number of people")
+     ("Xsize" . "700")
+     ("Ysize" . "400")
+     ("chartbackgroundcolor" . "255,255,255")
+     ("plotbackgroundcolor" . "200,200,200")
+     ("seriesbackgroundcolor" . "70,50,200")
+     ("includelegend"  . "false")
+     ("labelfontcolor" . "0,0,0")
+     ("titlefontsize" . 20)
+     ("labelfontsize" . 12)
+     ("titlefontcolor" . "0,0,0")
+     ("data" ,@(clean-dataset dataset)))))
+
+(defun clean-dataset (dataset)
+  (loop for datapoint in dataset collect
+       (if (stringp (car datapoint))
+	   (cons (clean-string (car datapoint))
+		 (cdr datapoint))
+	   datapoint)))
+
+(defun clean-string (label)
+  (string-remove-characters label '(#\')))
+	 
 
 	   
 (defun test-dataset1 (i)
