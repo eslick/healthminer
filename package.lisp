@@ -1,5 +1,7 @@
-(defpackage :lamsight
-  (:use :cl :utils))
-
 (defpackage :smart
-  (:use :cl :utils :hunchentoot :cl-who :json))
+  (:use :cl :stdutils :hunchentoot :json :elephant :langutils))
+
+(defpackage :smart-lex
+  (:use :cl :stdutils :langutils)
+  (:export :lexpat-match :lexpat-matches))
+

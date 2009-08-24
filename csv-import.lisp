@@ -71,8 +71,12 @@
 (defmethod extract-multiple-value-line (line)
   (field-line->list line #\, '(#\( #\) #\")))
 
-(defmethod multiple-value-data-p (line)
-  (> (length (extract-multiple-value-line line)) 1))
+(defparameter *not-multi-valued* '(11))
+
+(defmethod multiple-value-data-p (line offset)
+  (if (member offset *not-multi-valued*)
+      nil
+      (> (length (extract-multiple-value-line line)) 1)))
 
 ;;
 ;; Build a model of the data and reformat into an efficient queryable format
@@ -99,7 +103,8 @@
 (defmethod all-unique-field-values ((sd survey-data) field-no)
   (remove-nulls
    (remove-duplicates 
-    (all-field-values sd field-no) :test #'equal)))
+    (all-field-values sd field-no)
+    :test #'equal)))
 
 (defmethod all-unique-multiple-values (value-list)
   (remove-duplicates
@@ -129,7 +134,7 @@
   (let ((field (make-instance 'survey-field :id offset :model survey-model))
 	(all-values (all-unique-field-values survey-model offset))
 	open-p type)
-    (cond ((some #'multiple-value-data-p all-values)
+    (cond ((some #'(lambda (values) (multiple-value-data-p values offset)) all-values)
 	   (setq type :multi)
 	   (setf all-values (all-unique-multiple-values all-values)))
 	  ((> (length all-values) *open-field-value-threshold*)
@@ -150,11 +155,11 @@
   (setf (fields sm) (make-fields sm))
   #+allegro (excl::gc t)
   (loop for field in (fields sm) do
-        (when (eq (field-type field) :multi)
-	  (loop for response in (responses sm) do
-	       (setf (nth (field-id field) response)
-		     (extract-multiple-value-line 
-		      (nth (field-id field) response)))))))
+       (when (eq (field-type field) :multi)
+	 (loop for response in (responses sm) do
+	      (setf (nth (field-id field) response)
+		    (extract-multiple-value-line 
+		     (nth (field-id field) response)))))))
 
 (defmethod make-fields ((sm survey-data))
   (setf (fields sm)
@@ -168,10 +173,15 @@
 (defun survey-questions (survey-model)
   (loop 
      for q in (questions survey-model) 
-     for i from 0 do
-       (format t "~A: ~A~%" i q)))
+     for i from 0 collect (list i q)))
 
-;; Zuoyuy: this is a quick hack to illustrate some of the details; should be 
+(defun print-survey-questions (survey-model)
+  (mapc #'(lambda (pair) 
+	    (format t "~A: ~A~%" (first pair) (second pair)))
+	(survey-questions survey-model)))
+
+
+;; Zuoyu: this is a quick hack to illustrate some of the details; should be 
 ;; cleaned up to support the query types and graph types we want to enable.  
 ;; Get json data format input from John...
 
@@ -181,38 +191,59 @@
    (canonical-response-distribution sm field-id)))
 
 (defun canonical-response-distribution (sm field-id)
-  (sorted-alist
+;;  (sorted-alist
    (normalize-alist-series
-    (response-distribution sm field-id))))
+    (response-distribution sm field-id)))
+
+(defun get-field (sm field-id)
+  (nth field-id (fields sm)))
 
 (defun get-field-question (sm field-id)
   (field-question (nth field-id (fields sm))))
 
 (defun response-distribution (sm field-id)
   "Returns an alist of value occurances to a given question"
-  (let ((hash (make-hash-table :test #'equal))
-	(field (nth field-id (fields sm)))
-	(total 0)
-	(responses 0))
-    ;; Not sure how to handle the overlap distribution of a multi-valued response
-    ;; Each response entry is a list for field types = :multi
-    (assert (eq (field-type field) :single))
+  (let ((field (nth field-id (fields sm))))
 ;;    (format t "Computing the distribution of responses to: ~A~%With possible values:"
 ;;	    (field-question field))
+    (if (eq (field-type field) :single)
+	(single-response-distribution sm field)
+	(multi-response-distribution sm field))))
+
+(defun single-response-distribution (sm field)
     ;; Init entries
+  (let ((hash (make-hash-table :test #'equal))
+	(total 0)
+	(responses 0))
     (mapc (lambda (value)
 ;;	    (print value)
 	    (setf (gethash value hash) 0))
 	  (field-values field))
     ;; Count responses
     (loop for response in (responses sm) do
-	 (let ((value (nth field-id response)))
+	 (let ((value (nth (field-id field) response)))
 	   (incf total)
 	   (when value
 	     (incf responses)
 	     (incf (gethash value hash)))))
     (values (hash-items hash) (/ responses total))))
 
+(defun multi-response-distribution (sm field)
+  (let ((total 0)
+	(responses 0)
+	(hash (make-hash-table :test #'equal)))
+    (mapc (lambda (value)
+	    (setf (gethash value hash) 0))
+	  (field-values field))
+    (loop for response in (responses sm) do
+	 (let ((values (nth (field-id field) response)))
+	   (incf total)
+	   (when values
+	     (incf responses)
+	     (loop for value in values do
+		  (incf (gethash value hash))))))
+    (values (hash-items hash) (/ responses total))))
+	 
 
 ;; Some alist as series helpers
 

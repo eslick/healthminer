@@ -3,7 +3,7 @@
 
 (defparameter *users* '(("eslick" "food" (:scary-hair :evil))))
 
-(defvar *our-mutex* (hunchentoot-mp:make-lock "our-lock"))
+(defvar *our-mutex* (bordeaux-threads:make-lock "our-lock"))
 (defvar *events* '())
 (defvar *model* nil)
   
@@ -20,6 +20,8 @@
   (setf *model* (make-instance 'survey-model 
 			       :file "/Users/eslick/Work/newmed/smart/websurvey.csv"))
   (push (create-list-dispatcher)
+	*dispatch-table*)
+  (push #'dispatch-easy-handlers
 	*dispatch-table*))
 
 (defun add-regex-dispatch (regex fn)
@@ -32,7 +34,7 @@
        ,@body)
      (add-regex-dispatch ,(format nil "^/~a[/]*" url) ',name)))
 
-(defmacro defapp (name url &body body)
+;;(defmacro defapp (name url &body body)
 
 (defmacro with-template (title &body body)
   `(with-html-output-to-string (*standard-output*)
@@ -49,7 +51,7 @@
 (defpage main-page "" 
   (with-template "Main Demo"
     (:p "This is a simple test")
-    (:form :action "http://lamsight-dev.media.mit.edu/render/servlet/Renderer2" 
+    (:form :action "http://lamsight-dev.media.mit.edu/render/servlet/ChartAPI" 
 	   :method "post"
 	   (:label "Foo")
 	   (:select :name "json"
@@ -61,6 +63,8 @@
 (defpage foo "foo"
   (with-template "Foo"
     (:p "This is a test")))
+
+;; Datasets
 
 (defparameter test-dataset 
   '(("Bob's" . 81) ("Joe" . 82) ("Kathy" . 83)))
@@ -105,3 +109,26 @@
 ;;	     (subseq response 0 (min (length response) 4))))))
 
 ;; 
+;; Using Hunchentoot's easy handler model
+;;
+
+
+(define-easy-handler (main-page2 :uri "/main2"
+				 :default-request-type :post)
+    ((state-variable :parameter-type 'string))
+  (with-html-output-to-string (*standard-output* nil :prologue t)
+    (:html
+     (:head (:title "Hello world!"))
+     (:body
+      (:h1 "Hello world!")
+      (:p "This is my lisp web server, running on Hunchentoot.")
+      (:p (:form
+	   :method :post
+	   (:table
+	    :border 0 :cellpadding 5 :cellspacing 0
+	    (:tr (:td :style "text-align: right" (str "Say hello:"))
+		 (:td (:input :type :text
+			      :name "state-variable"
+			      :value state-variable))
+		 (:td (:input :type :submit :value "Submit"))))))
+      (:p "The string you entered was: " (str state-variable))))))
