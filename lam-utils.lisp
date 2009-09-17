@@ -100,8 +100,10 @@
 ;; Manual classification
 ;; ===========================================================
 
-(defun random-label-dataset (dataset samples &key description subset)
-  (let* ((raw-list (extract-term-list (dataset-data dataset)))
+(defun random-label-dataset (dataset samples &key description subset (key #'identity))
+  (let* ((raw-list (if (eq (type-of dataset) 'dataset)
+		       (funcall key (dataset-data dataset))
+		       dataset))
 	 (list (if subset (subseq raw-list 0 subset) raw-list))
 	 (random-subset (random-subset list samples))
 	 (results (loop for elt in random-subset
@@ -109,7 +111,7 @@
 			       (format t "Label for '~A': " elt)
 			       (cons elt (read))))))
     (make-instance 'evaluation :description description
-		   :dataset dataset
+		   :dataset (if (listp dataset) "List argument" dataset)
 		   :results results)))
 
 (defun extract-term-list (data)
@@ -124,10 +126,21 @@
     (format t "Label for '~A': " elt)
     (cons elt (read))))
 
-(defun convert-labels (labels)
+(defun convert-rel-labels (labels)
+  (mapcar #'convert-rel-label labels))
+
+(defun convert-rel-label (label)
+  (case label
+    (s 'scientific) ;; Something you could read or get from a dr. / may not be accurate
+    (p 'patient) ;; An interesting patient or lifestyle proposal / feasible
+    (a 'anaphor) ;; makes sense, but obscured by anaphor
+    (o 'other)   ;; General conversation or too specific
+    (j 'junk)))  ;; Phrases are junk or too general
+
+(defun convert-fragment-labels (labels)
   (mapcar #'convert-label labels))
 
-(defun convert-label (label)
+(defun convert-fragment-label (label)
   (case label
     (d 'domain)
     (s 'specific)
@@ -140,15 +153,36 @@
     (mapcar (lambda (elt) (incf-hash elt table)) list)
     (hash-items table)))
 
-(defun print-evaluation (evaluation)
-  (format t "Dataset: ~A~%  ~A~%" 
-	  (dataset-title (evaluation-dataset evaluation))
-	  (dataset-description (evaluation-dataset evaluation)))
-  (format t "Evaluation: ~A" (evaluation-description evaluation))
-  (print (histogram 
-	  (convert-labels
-	   (mapcar #'cdr (evaluation-results evaluation)))))
-  nil)
+(defun print-evaluation (evaluation &optional (label-converter 'convert-fragment-labels))
+  (when (> (length (evaluation-results evaluation)) 2)
+    (unless (stringp (evaluation-dataset evaluation))
+      (format t "Dataset: ~A~%  ~A~%" 
+	      (dataset-title (evaluation-dataset evaluation))
+	      (dataset-description (evaluation-dataset evaluation))))
+    (format t "Evaluation: ~A~%(e.g ~A)" 
+	    (evaluation-description evaluation)
+	    (subseq (evaluation-results evaluation) 0 2))
+    (let* ((results (evaluation-results evaluation))
+	   (hist (histogram 
+		  (funcall label-converter
+			   (mapcar #'cdr results)))))
+      (print hist)
+      (format t "~%Summary: ~A% relevant~%~%" 
+	      (coerce
+	       (cond ((assoc 'domain hist)
+		      (* 100 
+			 (/ (+ (cdr (assoc 'domain hist))
+			       (cdr (assoc 'relevant hist)))
+			    (length (evaluation-results evaluation)))))
+		     ((assoc 'scientific hist)
+		      (* 100
+			 (/ (+ (cdr (assoc 'scientific hist))
+			       (cdr (assoc 'patient hist))
+			       (cdr (assoc 'anaphor hist)))
+			    (length (evaluation-results evaluation)))))
+		     (t 0))
+	       'float)))
+    nil))
 
   
 ;;
@@ -162,11 +196,13 @@
 (defmacro seti (var expr)
 	 `(progn (setf ,var ,expr) t))
 
-(defun more (list &optional (size 10))
+(defun more (list &key (size 10) (fn #'identity) (print t))
   (loop for elt in list 
      for i from 1 do
      (progn 
-       (print elt)
+       (let ((value (funcall fn elt)))
+	 (when print 
+	   (print value)))
        (when (= (mod i size) 0)
 	 (when (eq (read-char) #\q)
 	   (return nil))))))

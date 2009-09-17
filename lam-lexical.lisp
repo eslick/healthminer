@@ -20,6 +20,7 @@
 	     (t elt))))
 
 (defun var-p (var) (symbolp var))
+(defun wildcard-p (var) (and (var-p var) (equal "?" (symbol-name var))))
 (defun token-p (var) (numberp var))
 
 ;; Maintain state
@@ -63,7 +64,9 @@
   (with-lexpat-state (state)
     (let ((var (first pattern))
 	  (token (aref (document-text doc) offset)))
-      (cond ((var-p var) ;; if a variable
+      (cond ;;((wildcard-p var)
+	    ;; (increment pattern state))
+	    ((var-p var) ;; if a variable
 	     (consume-variable pattern state))
 	    ((match-overflow-p state) ;; overrun variable window
 	     (finish pattern state))
@@ -97,7 +100,7 @@
 
 (defun-lexpat record-variable (state)
   (push (cons current-var 
-	      (make-phrase-from-vdoc doc (1+ last) 
+	      (make-phrase-from-vdoc doc (if (= last start) last (1+ last))
 				     (- (min offset (- (length (document-text doc)) 10))
 					(1+ last))))
 	matches)

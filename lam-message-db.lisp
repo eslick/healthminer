@@ -341,8 +341,9 @@
 (defvar *message-map* nil)
 
 (defun get-message-map (&optional force)
-  (aif-ret (and (not force) *message-map*)
-    (build-message-map)))
+  (aif (or force (not *message-map*))
+       (build-message-map)
+       *message-map*))
 
 (defun build-message-map ()
   (let ((hash (make-hash-table))
@@ -351,7 +352,7 @@
      (lambda (message)
        (with-slots (body) message
 	 (let ((vdoc (langutils::vector-tag body)))
-	   (setf (gethash (ele::oid message) hash)
+	   (setf (gethash (get-message-id message) hash)
 		 (list (mapcar #'get-lemma-for-id (vector-document-words vdoc))
 		       vdoc
 		       (get-extended-chunks vdoc)))))
@@ -410,7 +411,7 @@
 (defun get-message-rec (msg)
   (typecase msg
     (number (gethash msg *message-map*))
-    (message (gethash (ele::oid msg) *message-map*))))
+    (message (gethash (get-message-id msg) *message-map*))))
 
 (defun message-lemmas (msg-ref) (mmap-lemmas (get-message-rec msg-ref)))
 (defun message-doc (msg-ref) (mmap-vdoc (get-message-rec msg-ref)))
@@ -428,3 +429,152 @@
 	 (let ((body ,(generate-extract-body pageval)))
 	   ,@body)))))
 
+;;;; ==========================================
+;;;; ANNOTATIONS
+;;;; ==========================================
+
+(defparameter *msg-annotation-version* 1)
+
+(defpclass msg-annotation ()
+  ((message :accessor message :initarg :message :index t)
+   (type :accessor type :initarg :type)
+   (range :accessor range :initarg :range
+	  :documentation "nil means all sentences, or 1 sentence or (s,e)")
+   (version :accessor version :initarg :version 
+	    :initform *msg-annotation-version*)))
+
+(defun make-msg-annotation (message type &optional range notes)
+  (make-instance 'msg-annotation
+		 :message message
+		 :type type
+		 :range range
+		 :notes notes))
+
+(defun msg-annotations (message)
+  (get-instances-by-value 'msg-annotation 'message message))
+
+(defpclass text-annotation ()
+  ((message :accessor message :initarg :message :index t)
+   (type :accessor type :initarg :type)
+   (start :accessor start :initarg :start)
+   (end :accessor end :initarg :end)
+   (version :accessor version :initarg :version 
+	    :initform *msg-annotation-version*)))
+
+(defun make-text-annotation (message type start end)
+  (make-instance 'text-annotation
+		 :message message
+		 :start start 
+		 :end end 
+		 :type type))
+
+(defun msg-annotation->phrase (annotation)
+  (make-instance 'phrase 
+		 :document (message-doc (get-message (message annotation)))
+		 :type (type annotation)
+		 :start (start annotation)
+		 :end (end annotation)))
+
+(defun text-annotations (message)
+  (get-instances-by-value 'text-annotation 'message message))
+
+;;
+;; Interactive annotation
+;;
+
+(define-condition repeat-annotation ()
+  ())
+
+(defun annotate-messages (messages &key skip start-at)
+  (labels ((skip-to (msgref)
+	     (subseq messages (position (get-message msgref) messages 
+					:key #'get-message))))
+    (when start-at
+      (setf messages (skip-to start-at)))
+    (loop for message in messages do
+	 (handler-case
+	     (unless (and skip (has-annotations? message))
+	       (annotate-message message))
+	   (repeat-annotation ()
+	     (annotate-messages (skip-to message))))))
+  t)
+
+(defun has-annotations? (message)
+  (or (msg-annotations message)
+      (text-annotations message)))
+
+(defmacro while-annotating ((expr) &body options)
+  (assert (find 'return (flatten options)))
+  `(loop
+      (let ((,expr (read)))
+	(cond ,@options))))
+
+(defun annotate-message (message)
+  ;; Message level annotations
+  (let ((sentences (flatten (extract-sentence-windows (message-doc message) 2))))
+    ;; Print all sentences w/ #'s
+    (format t "~A~%" (get-message-id message))
+    (loop for sentence in sentences 
+	 for i from 0 do
+	 (format t "~A: ~A~%" i (phrase->string sentence)))
+    (loop for annotation in (msg-annotations message) do
+	 (with-slots (type range) annotation
+	   (format t "(~A ~A)~%" type range)))
+    ;; Annotate sentences or regions of sentences
+    ;; Default is message label of all sentences
+    (while-annotating (expr)
+      ((eq expr 'c) (return))
+      ((eq expr 'r) (signal 'repeat-annotation))
+      ((eq expr 'x) (return-from annotate-message))
+      ((eq expr 'd) (drop-instances (msg-annotations message)))
+      ((listp expr)
+       (apply #'make-msg-annotation message expr)))
+    ;; Phrase level annotations
+    (loop for sentence in sentences do
+	 (print-sentence message sentence :marks t :annotations t)
+	 (while-annotating (expr)
+	   ((eq expr 'd)
+	    (drop-instances (annotations-for-phrase message sentence)))
+	   ((eq expr 'r) 
+	    (signal 'repeat-annotation))
+	   ((eq expr 'x)
+	    (return-from annotate-message))
+	   ((listp expr)
+	    (dbind (type start end) expr
+	      (make-text-annotation message type 
+				    (+ (phrase-start sentence) start)
+				    (+ (phrase-start sentence) end))))
+	   (t (return))))))
+
+(defun print-message (message)
+  (awhen (msg-annotation message)
+    (with-slots (type subtype notes) it
+	(format t "Type: ~A  Subtype: ~A  Notes: ~A"
+		type subtype notes)))
+  (print-message-body message))
+
+
+(defun print-sentence (message sphrase &key marks annotations)
+  (let* ((words (tokens-for-ids (phrase-words sphrase))))
+    (aif (and annotations (annotations-for-phrase message sphrase))
+      (loop for annotation in it do
+	   (with-slots (start end type) annotation
+	     (format t "~A:~A ~A~%" start end type)))
+      (format t "~%"))
+    (when marks
+      (loop 
+	 for i from 0 
+	 for word in words do
+	   (format t "~v,A " (max (length word) 3) i))
+      (format t "~%"))
+    (loop for word in words do
+	 (format t "~v,A " (max (length word) 3) word))
+    (format t "~%")))
+
+(defun annotations-for-phrase (message sphrase)
+  (let ((start (phrase-start sphrase))
+	(end (phrase-end sphrase)))
+    (select-if (f_ (and (>= (start _) start)
+			(<= (end _) end)))
+	       (text-annotations message))))
+  

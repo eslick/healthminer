@@ -8,7 +8,6 @@
   (init-langutils)
   (open-store '(:BDB "/users/eslick/work/db/lam-listserv/"))
   (ensure-stopword-hash)
-  (make-message-word-counts)
   (get-message-map))
 
 (defpclass dataset ()
@@ -16,6 +15,9 @@
    (description :accessor dataset-description :initarg :description :initform "")
    (data :accessor dataset-data :initarg :data)
    (date :accessor dataset-date :initarg :date :initform (get-universal-time))))
+
+(defun all-datasets ()
+  (get-instances-by-class 'dataset))
 
 (defmethod print-object ((obj dataset) stream)
   (format stream "#<DATASET '~A'>" (or (dataset-title obj) "Empty")))
@@ -27,19 +29,24 @@
    (notes :accessor evaluation-notes :initarg :notes :initform "")
    (date :accessor evaluation-date :initarg :date :initform (get-universal-time))))
 
+(defun all-evaluations ()
+  (get-instances-by-class 'evaluation))
+
 (defmethod print-object ((obj evaluation) stream)
   (format stream "#<EVALUATION '~A'>" (or (evaluation-description obj) "Empty")))
+
 
 ;; ================================================
 ;; Manipulating Sentence Windows
 ;; ================================================
 
 (defmacro map-all-windows ((wvar wsize &optional (report 0)) &body body)
-  `(map-messages (msg-id rec ,report)
-     (loop 
-	with windows = (extract-sentence-windows (mmap-vdoc rec) ,wsize)
-	for ,wvar in windows
-	collect (progn ,@body))))
+  (with-gensyms (windows msg-id rec)
+    `(map-messages (,msg-id ,rec ,report)
+       (loop 
+	  with ,windows = (extract-sentence-windows (mmap-vdoc ,rec) ,wsize)
+	  for ,wvar in ,windows
+	  collect (progn ,@body)))))
 
 (defun extract-sentence-windows (vdoc size)
   (remove-nulls
@@ -47,9 +54,9 @@
       with sentences = (document-sentence-phrases vdoc)
       with length = (length sentences)
       for offset from 0 upto length
-      collect (if (< (- length offset) size)
+      collect (if (< (- length offset) (min size 2))
 		  (subseq sentences offset)
-		  (subseq sentences offset (1- (+ offset size)))))))
+		  (subseq sentences offset (1- (+ offset (min size 2))))))))
 ;;   (maplist (lambda (sentences)
 ;;	      (when (>= (length sentences) size) 
 ;;		(subseq sentences 0 size)))
@@ -59,7 +66,8 @@
 ;;  (declare (optimize (speed 1) (safety 3)))
   (labels ((plen (start end)
 	     (declare (type fixnum start end))
-	     (- (or end (length (vector-document-words vdoc))) start))
+	     (min (1+ (- (or end (length (vector-document-words vdoc))) start))
+		  (- (length (vector-document-words vdoc)) start)))
 	   (phrase-gen (start ends)
 	     (declare (type fixnum start)
 		      (type cons ends))
@@ -68,8 +76,28 @@
 		 (cons (make-phrase-from-vdoc 
 			vdoc start (plen start (when ends (car ends))))
 		       (when ends 
-			 (phrase-gen (car ends) (rest ends)))))))
-    (phrase-gen 0 (term-positions "." (vector-document-words vdoc)))))
+			 (phrase-gen (1+ (car ends)) (rest ends)))))))
+    (phrase-gen 0 (sort (append (term-positions "." (vector-document-words vdoc))
+				(term-positions "?" (vector-document-words vdoc))
+				(term-positions "!" (vector-document-words vdoc)))
+			#'< ))))
+
+;; ============================
+;; Filter windows by terms
+;; ============================
+
+(defun all-term-filtered-windows (terms &optional (size 3))
+  (let ((windows nil)
+	(ids (sort (mapcar #'id-for-token terms) #'<)))
+    (map-all-windows (window size)
+      (when (some (lambda (word)
+		    (member word ids :test #'equal))
+		  (sort (apply #'append 
+			       (mapcar #'phrase-words window))
+			#'<))
+	(when (= 0 (mod (length windows) 500)) (print (length windows)))
+	(push window windows)))
+    windows))
 
 ;; ============================
 ;; Extract lexical windows
@@ -98,7 +126,25 @@
 ;;  Extract lexical pattern matches 
 ;; ===================================
 
+(defun all-filtered-lexical-matches (pattern filter-terms &key max (phrase-size 20))
+  (let ((smart-lex::*max-window-size* phrase-size))
+    (declare (special smart-lex::*max-window-size*))
+    (filter-matches (all-lexical-matches pattern max) filter-terms)))
+
 (defun all-lexical-matches (pattern &optional max)
+  (let ((matches nil)
+	(docnum 0))
+    (map-messages (id rec)
+      (awhen (smart-lex:lexpat-matches pattern (mmap-vdoc rec))
+	(push (mapcar (lambda (match)
+			(cons id (filter-end-phrases pattern match)))
+		      it)
+	      matches)
+	(when (and (not (null max)) (> (incf docnum) max))
+	  (return-from all-lexical-matches (flatten1 matches)))))
+    (flatten1 matches)))
+
+(defun all-chunk-matches (pattern &optional max)
   "Return lexical pattern matches for all "
   (let ((matches nil)
 	(docnum 0))
@@ -109,25 +155,70 @@
 		      it)
 	      matches)
 	(when (and (not (null max)) (> (incf docnum) max))
-	  (return-from all-lexical-matches (flatten1 matches)))))
+	  (return-from all-chunk-matches (flatten1 matches)))))
     (flatten1 matches)))
 
 (defun filter-matches (matches filter-terms)
   (let ((ftable (make-filter-table filter-terms)))
     (loop 
        for (id . match) in matches 
-       for phrases = (remove-nulls (cdrs match))
-       when (= (length match) (length (filter-chunks phrases ftable)))
-       collect (cons id match)))) 
+       for phrases = (flatten (remove-nulls (cdrs match)))
+       when (= (length (filter-chunks phrases ftable)) (length phrases))
+       collect (cons id match))))
+
+(defun filter-end-phrases (pattern match)
+  (when (symbolp (first pattern))
+    (setf (cdr (first match))
+	  (right-sentence (cdr (first match)))))
+  (when (symbolp (last1 pattern))
+    (setf (cdr (last1 match))
+	  (left-sentence (cdr (last1 match)))))
+  match)
+
+(defparameter *sentence-boundaries* nil)
+
+(defun sentence-boundaries ()
+  (aif-ret *sentence-boundaries*
+    (setf *sentence-boundaries*
+	  (mapcar #'id-for-token '("." "?" "!")))))
+
+(defun left-sentence (phrase)
+  (with-slots (langutils::document langutils::start langutils::end) phrase
+    (let ((text (document-text langutils::document))
+	  (boundaries (sentence-boundaries)))
+      (loop for pos from langutils::start upto langutils::end 
+	 do (progn
+	      (when (member (aref text pos) boundaries)
+		(return-from left-sentence 
+		  (make-phrase-from-vdoc 
+		   langutils::document 
+		   langutils::start 
+		   (- pos langutils::start))))))
+      phrase)))
+
+
+(defun right-sentence (phrase)
+  (with-slots (langutils::document langutils::start langutils::end) phrase
+    (let ((text (document-text langutils::document))
+	  (boundaries (sentence-boundaries)))
+      (loop for pos from langutils::end downto langutils::start
+	 do (progn
+	      (when (member (aref text pos) boundaries)
+		(return-from right-sentence 
+		  (make-phrase-from-vdoc 
+		   langutils::document 
+		   (1+ pos)
+		   (- langutils::end pos))))))
+      phrase)))
+
 
 (defun match-chunks (matches chunks)
   "Extract the document chunks for each matched variable's phrase"
   (loop for (label . phrase) in matches
        collect (cons label 
-		     (longest-phrase
-		      (phrases-in-window chunks
-					 (phrase-start phrase)
-					 (phrase-end phrase))))))
+		     (phrases-in-window chunks
+					(phrase-start phrase)
+					(phrase-end phrase)))))
 
 (defun phrases-in-window (phrases start end)
   "Given a list of phrases, extract all that fall on or between start/end"
@@ -149,9 +240,79 @@
 		  elt phrase))
     elt))
 
-;;(defun print-matches (matches)
-;;  (
+;;
+;; Relation mining
+;;
 
+
+(defparameter *relation-lexical-patterns-take1* 
+  '((cause "results" "in" effect)
+    (cause "can" "lead" "to" effect)
+    (effect "because" cause) ;; too generic
+    (cause "causes" effect)
+    (cause "can" "help" effect)
+    (cause "which" "helps" effect)
+    ("said" cause "could" "mean" effect)
+    ("that" cause "could" "mean" effect)
+    ("should" effect "if" cause)
+    ("if" cause "then" effect)
+
+    ("when" cause "," effect)
+    (effect "caused" "by" cause)))
+
+(defparameter *relation-lexical-patterns-take2* 
+  '((cause "results" "in" effect)
+    (cause "can" "lead" "to" effect)
+    (cause "caused" effect)
+    (cause "can" "help" effect)
+    (cause "which" "helps" effect)
+    ("said" cause "could" "mean" effect)
+    ("that" cause "could" "mean" effect)
+    ("should" effect "if" cause)
+    ("if" cause "then" effect)
+    ("when" cause "," effect)
+    ("believe" effect "is" "due" "to" cause)
+    (effect "caused" "by" cause)))
+
+(defun stringify-match (match)
+  (dbind (id &rest pairs) match
+    (cons id
+	  (loop for (name . phrase) in pairs collect
+	       (cons name (phrase->string phrase))))))
+
+(defun stringify-matches (matches)
+  (mapcar #'stringify-match matches))
+
+(defun lexical-relation-patterns (data)
+  (car data))
+      
+(defun lexical-relation-data (data)
+  (array->list (cdr data)))
+
+(defun lexical-relation-list-to-unique-strings (matches)
+  (remove-duplicates
+   (stringify-matches matches)
+   :test #'equalp :key #'cdr))
+
+(defun all-lexical-relations (&optional (patterns *relation-lexical-patterns-take2*))
+  (apply #'append 
+	 (mapcar #'all-lexical-matches
+		 patterns)))
+
+(defun filtered-lexical-relations (filter-terms &optional (patterns *relation-lexical-patterns-take2*))
+  (apply #'append
+	 (mapcar (lambda (pattern)
+		   (filter-matches (all-lexical-matches pattern) filter-terms))
+		 patterns)))
+
+(defun select-matches-by-term (term matches)
+  (let ((results nil)
+	(id (id-for-token term)))
+    (loop for match in matches do
+	 (loop for phrase in (cdrs (cdr match)) do
+	      (when (member id (phrase-words phrase))
+		(push match results))))
+    results))
 
 ;; ===========================================================
 ;;  Domain Term Lists -> Chunks
@@ -288,8 +449,16 @@
     (with-slots (langutils::end) (last1 window)
       (funcall extractor langutils::document (cons langutils::start langutils::end)))))
 
+(defun window-chunks (window &optional (extractor 'get-nx-chunks))
+  (with-slots (langutils::document langutils::start) (first window)
+    (with-slots (langutils::end) (last1 window)
+      (select-if (f (chunk)
+		   (and (< (phrase-start chunk) langutils::start)
+			(> (phrase-end chunk) langutils::end)))
+		 (funcall extractor langutils::document)))))
+
 (defun make-filter-table (filter-list)
-  (let ((filter-table (make-hash-table :test #'eq)))
+  (let ((filter-table (make-hash-table :test 'eq)))
     (mapc (lambda (term) (setf (gethash (id-for-token term) filter-table) t)) filter-list)
     filter-table))
 
@@ -352,6 +521,100 @@
 ;; ===================================================================
 ;;  Corpus Analysis 
 ;; ===================================================================
+
+;;; Message relations (hand labeled)
+
+(defpclass message-relations ()
+  ((message :accessor message :initarg :msg :index t)
+   (type :accessor message-type :initarg :type :initform nil)
+   (relations :accessor relations :initarg :relations)
+   (description :accessor descripation :initarg :description)))
+
+(defun get-message-relation (message)
+  (get-instance-by-value 'message-relations 'message message))
+
+(defun all-message-relations ()
+  (get-instances-by-class 'message-relations))
+
+(defmethod print-object ((obj message-relations) stream)
+  (format stream "#<MSG-RELS [~A] for ~A>" (message-type obj)
+	  (ele::oid obj)))
+
+(defun get-message-type ()
+  (format t "~%What type of message? ")
+  (let ((type (read)))
+    (if (member type '(answer info story sympathy thankyou junk 
+		       discussion question))
+	type
+	(get-message-type))))
+
+(defun hand-label-relations (message)
+  (assert (eql (type-of message) 'message))
+  (print-message-body message)
+  (let ((relations nil)
+	(type (get-message-type)))
+    (format t "~%Record relation (quit/empty/undo/record): ")
+    (loop for relation = (read-line)
+	 while (> (length relation) 0)
+	 do (progn
+	      (if (= (length relation) 1)
+		  (case (elt relation 0)
+		    (#\q (return-from hand-label-relations nil))
+		    (#\e (setf relations nil))
+		    (#\u (setf relations (rest relations))))
+		  (push (read-from-string relation) relations))
+	      (format t "Record relation: ")))
+    (make-instance 'message-relations :msg message :type type
+		   :relations relations)))
+
+(defun hand-label-messages (messages)
+  (labels ((continue () (hand-label-messages (rest messages)))
+	   (repeat () (hand-label-messages messages))
+	   (msg () (first messages)))
+    (acond ((null messages) nil)
+	   ((get-message-relation (msg))
+	    (unless (message-type it)
+	      (print-message-body (msg))
+	      (setf (message-type it)
+		    (get-message-type)))
+	    (continue))
+	   ((null (hand-label-relations (msg)))
+	    (repeat))
+	   (t (continue)))))
+
+(defun message-relation-distribution ()
+  (let ((hist (histogram 
+	       (mapcar #'message-type 
+		       (all-message-relations)))))
+    (format t "~A% messages of ~A have useful info" 
+	    (* 100 (coerce (/ (+ (cdr (assoc 'answer hist))
+				 (cdr (assoc 'info hist)))
+			      (apply #'+ (cdrs hist)))
+			   'float))
+	    (apply #'+ (cdrs hist)))
+    hist))
+
+;;(defun recall-of-labeled-messages (evaluation)
+  
+
+(defparameter *weighted-messages* (make-hash-table))
+
+(defun weigh-messages (terms)
+  (setf *weighted-messages* (make-hash-table))
+  (map-messages (msg-id rec)
+    (let* ((words (vector-document-words (mmap-vdoc rec)))
+	   (size (length words)))
+      (when (> size 20)
+	(loop for word in (sorted-word-counts (tokens-for-ids words) :test #'equal)
+	   when (member word terms :test #'equal)
+	   do (if #2=(gethash msg-id *weighted-messages*)
+		  (incf #2# (update-entropy-weight #2#))
+		  (setf #2# (update-entropy-weight 0)))))))
+  t)
+
+;;(defun update-entropy-weight (current)
+;;  (+ current (1+ (log (* 
+  
 
 ;;; Word distributions
 
@@ -424,7 +687,6 @@
     (incf count (length (mmap-lemmas rec))))
   count)
 
-
 ;;
 ;; PMI within corpus
 ;;
@@ -483,7 +745,6 @@
 ;; (defun compute-fast-tf ()
 ;;   (let* ((terms (round (* 1.2 (hash-table-count *word-counts*))))
 ;; 	 (msgs (+ (hash-table-count *message-map*) 10)))
-    
 ;; 	(docmap (make-hash-table :size (hash-table-count *message-map*)
 ;; 	(array 
 ;; 	 (make-array (list (hash-table-count *word-counts*)

@@ -117,20 +117,21 @@
 	  (cleaned-divisi-tokens terms :stopwords nil)
 	  (get-divisi-term-pairs (mmap-vdoc rec) start position end))))
 
-(defun cleaned-divisi-tokens (terms &key (stopwords t))
-  (remove-leading-qualifiers
-   (mapcar #'trim-non-alphanumeric
-	   (mapcar #'string-downcase 
-		   (remove-if (lambda (token)
-				(let ((len (length token)))
-				  (or (> len 30) (< len 3)
-				      (not (alpha-char-p (char token 0))))))
-			      (tokens-for-ids 
-			       (remove-if (lambda (term)
-					    (and stopwords
-						 (or (punctuation? term)
-						     (stopword? term))))
-					  terms)))))))
+(defun cleaned-divisi-tokens (terms &key (stopwords t) (qualifiers t))
+  (let ((cleaned 
+	 (mapcar #'trim-non-alphanumeric
+		 (mapcar #'string-downcase 
+			 (remove-if (lambda (token)
+				      (let ((len (length token)))
+					(or (> len 30)
+					    (not (alpha-char-p (char token 0))))))
+				    (tokens-for-ids 
+				     (remove-if (lambda (term)
+						  (and stopwords
+						       (or (punctuation? term)
+							   (stopword? term))))
+						terms)))))))
+    (if qualifiers (remove-leading-qualifiers cleaned) cleaned)))
 
 (defun filter-window-pairs (window-recs phrases)
   (flatten1
@@ -207,7 +208,7 @@
 (defun clean-chunks (chunks)
   (filter-if 
    (lambda (chunk)
-     (or (> (length (phrase-words chunk)) 5)
+     (or (> (length (phrase-words chunk)) 10)
 	 (some #'punctuation? (phrase-words chunk))))
    chunks))
 

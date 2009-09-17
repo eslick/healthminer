@@ -13,12 +13,13 @@
 		 (:file "lam-utils")
 		 (:file "lam-message-db")
 		 (:file "lam-patterns")
+		 (:file "lam-lexical")
 		 (:file "lam-listserv-mining")
 		 (:file "lam-divisi"))
 ;;		 (:file "webtest"))
     :serial t
     :in-order-to ((load-op (compile-op :smart)))
-    :depends-on (:stdutils :cl-json :hunchentoot :drakma :elephant :langutils))
+    :depends-on (:stdutils :cl-json :hunchentoot :drakma :elephant :langutils :f-underscore))
 
 (defsystem #:smart-explorer    
     :description "SMART: Semantic Manipulation, Analytics, Reporting and Terms"
