@@ -4,11 +4,29 @@
 ;;;; Bookkeeping
 ;;;;
 
+(defvar subset nil)
+(defvar annotated nil)
+(defvar terms nil)
+(defvar termhash nil)
+
+(defparameter *listserv-db-spec* '(:BDB "/users/eslick/work/db/lam-listserv/"))
+
+(defmacro with-lam-listserv (empty &rest body)
+  (declare (ignore empty))
+  `(with-store (*listserv-db-spec*)
+     ,@body))
+
 (defun init-lam-listserv-db ()
   (init-langutils)
-  (open-store '(:BDB "/users/eslick/work/db/lam-listserv/"))
+  (open-store *listserv-db-spec*)
   (ensure-stopword-hash)
-  (get-message-map))
+  (get-message-map)
+  (setf subset (dataset-data (last1 (all-datasets))))
+  (setf terms (seti terms (second (dataset-data (third (all-datasets))))))
+  (setf termhash (make-hash-table))
+  (loop for term in terms do
+       (setf (gethash (id-for-token term) termhash) t))
+  t)
 
 (defpclass dataset ()
   ((title :accessor dataset-title :initarg :title :initform "")
@@ -86,18 +104,21 @@
 ;; Filter windows by terms
 ;; ============================
 
-(defun all-term-filtered-windows (terms &optional (size 3))
+(defun all-term-filtered-windows (terms &optional (size 3) (stop-at nil))
   (let ((windows nil)
 	(ids (sort (mapcar #'id-for-token terms) #'<)))
-    (map-all-windows (window size)
-      (when (some (lambda (word)
-		    (member word ids :test #'equal))
-		  (sort (apply #'append 
-			       (mapcar #'phrase-words window))
-			#'<))
-	(when (= 0 (mod (length windows) 500)) (print (length windows)))
-	(push window windows)))
-    windows))
+    (catch 'terminate
+      (map-all-windows (window size)
+	(when (every (lambda (word)
+		       (member word ids :test #'equal))
+		     (sort (apply #'append 
+				  (mapcar #'phrase-words window))
+			   #'<))
+	  (push window windows)
+	  (when (= 0 (mod (length windows) 500)) (print (length windows)))
+	  (when (and stop-at (eq stop-at (length windows)))
+	    (throw 'terminate nil))))))
+    windows)
 
 ;; ============================
 ;; Extract lexical windows
@@ -396,7 +417,8 @@
 			  (loop 
 			     for position in 
 			     (term-positions term (vector-document-words doc))
-			     nconc (get-pivot-pairs (message-doc message) position))))
+			     nconc (mapcar (f_ (append _ (list message)))
+					   (get-pivot-pairs (message-doc message) position)))))
 		      (messages-for-word term)))))))
 
 (defun get-pivot-pairs (document position)
@@ -517,6 +539,111 @@
 	    (hash-keys averages))
     (hash-items averages)))
 
+;; ===================================================================
+;;  Corpus Analysis 
+;; ===================================================================
+
+(defparameter *message-types*
+  '(((name . general) (includes
+		       Nonlabeled 
+		       Indecipherable
+		       Incomprehensible
+		       Management 
+		       Welcome 
+		       Self-Talk 
+		       Exclamation
+		       Misspeak-Correction 
+		       Forward 
+		       Task
+		       Quoted-Material 
+		       Signature))
+    ((name . Social) (includes
+		      social-question
+		      Supportive
+		      Appreciation 
+		      Humor
+		      Acknowledgement
+		      Emotional-Material
+		      Life-Narrative
+		      Apology
+		      Misspeak-Self 
+		      Explicit ))
+    ((name . Information) (includes
+			   Command 
+			   Suggestion 
+			   Hedge 
+			   Performative
+			   Statement 
+			   Subjective-Statement 
+			   Declarative 
+			   Rhetorical-Question ))
+    ((name . Questions) (includes
+			 Question 
+			 Wh-Question 
+			 Y-N-Question 
+			 Or-Question 
+			 Tag-Question 
+			 Reformulation 
+			 Closing-Interruption  
+			 Rhetorical-Question))
+    ((name . Answer) (includes
+		      explaining
+		      expansion
+		      narrative
+		      accept
+		      clarification))
+    ((name . Response) (includes
+			Understanding-Check 
+			Accept-yes-answers 
+			Partial-Accept 
+			Partial-Reject 
+			Reject-No-Answers 
+			No-knowledge-answers
+			Dispreferred-answers 
+			Downplayer))))
+
+
+(defun find-enclosing-category (subcat)
+  (let ((rec (find-if (f (includes)
+			(member subcat includes))
+		      *message-types* :key #'second)))
+    (if (consp rec)
+	(cdar rec)
+	(if (root-category-p subcat) 
+	    subcat
+	    (progn (print subcat) nil)))))
+
+(defun root-category-p (cat)
+  (find cat *message-types* :key #'cdar))
+
+(defun message-distribution (messages)
+  (loop for message in messages do
+       (msg-annotations message)))
+
+(defun make-msg-treemap ()
+  "Blah, needs decomposition"
+  (let* ((msg-annotations (get-instances-by-class 'msg-annotation))
+	 (types (remove-if (f_ (member _ '(useful non-health)))
+			   (mapcar #'type msg-annotations)))
+	 (type-list (remove-duplicates types))
+	 (text-annotations-by-type (mapcar (lambda (msganno)
+					    (when (text-annotations 
+						   (message msganno))
+					      (type msganno)))
+					  msg-annotations))
+	 (text-types (remove-if (f_ (member _ '(useful non-health)))
+				text-annotations-by-type)))
+     (loop for type in type-list collect
+	  (list (cons "name" (format nil "LLS.~A.~A" 
+				     (find-enclosing-category type) type))
+		(cons "size" (/ (count type types) (length types)))
+		(cons "count" (count type types))
+		(cons "annotated" (/ (count type text-types)
+				     (count type types)))))))
+	       
+(defun dump-msg-treemap (&optional (file "~/msg-map.json"))
+  (with-output-file (stream file)
+    (json::encode-json (make-msg-treemap) stream)))
 
 ;; ===================================================================
 ;;  Corpus Analysis 
@@ -593,6 +720,37 @@
 			   'float))
 	    (apply #'+ (cdrs hist)))
     hist))
+
+(defun recall-via-filter-fn (filter-fn messages)
+  (let* ((text-annos (select-if #'text-annotations messages))
+	 (msg-annos (select-if #'msg-annotations messages))
+	 (non-text-annos (set-difference msg-annos text-annos))
+	 (text-matches (select-if filter-fn
+				  text-annos))
+	 (msg-matches (select-if filter-fn
+				 non-text-annos))
+	 (true-pos (coerce (/ (length text-matches) (length text-annos)) 'float))
+	 (false-pos (coerce (/ (length msg-matches) (length non-text-annos)) 'float)))
+    (print true-pos)
+    (print false-pos)
+    (values true-pos false-pos)))
+
+(defun recall-via-term-ids (messages term-ids &optional (threshold 3))
+  (recall-via-filter-fn (domain-term-threshold-fn term-ids threshold)
+			messages))
+
+(defun domain-term-threshold-fn (term-ids threshold)
+  (lambda (msg)
+    (> (domain-term-count msg term-ids)
+       threshold)))
+
+(defun domain-term-count (message term-ids)
+  (let ((words (vector-document-words (message-doc message)))
+	(count 0))
+    (loop for word in words 
+       when (member word term-ids)
+       do (incf count))
+    count))
 
 ;;(defun recall-of-labeled-messages (evaluation)
   
@@ -858,3 +1016,76 @@
 				 (windows-for-positions size positions words))))))
 	     (get-message-map))
     windows))
+
+
+;;
+;; Simple Naive Bayes
+;;
+
+(defstruct sentence-classifier
+  feature-space classifier)
+
+;; Train
+
+(defun train-on-message-sentences (messages labels)
+  "Given a list of messages train binary classifier on sentences
+   with msg-annotation in label set vs. not"
+  (let ((fspace (make-instance 'feature-space :dimensions 1))
+	(bayes (make-instance 'naive-bayes)))
+    (loop for message in messages do
+	 (let ((annos (msg-annotations message)))
+	   (loop for sentence in (message-sentences message) 
+		 for i from 0 
+	         when annos do
+		(train-on-sentence (sentence-binary-class i annos labels)
+				   sentence bayes fspace))))
+    (make-sentence-classifier :feature-space fspace :classifier bayes)))
+
+(defun message-sentences (message &optional (size 2))
+  (flatten (extract-sentence-windows (message-doc message) size)))
+
+(defun sentence-binary-class (index annotations labels)
+  (if (member (sentence-class index annotations) labels)
+      'yes
+      'no))
+
+(defun sentence-class (index annotations)
+  (unless annotations (return-from sentence-class 'unknown))
+  (loop for annotation in annotations do
+       (let ((range (range annotation)))
+	 (cond ((null range)
+		(return (type annotation)))
+	       ((numberp range)
+		(when (eq index range)
+		  (return (type annotation))))
+	       ((consp range)
+		(when (and (>= index (first range))
+			   (<= index (second range)))
+		  (return (type annotation))))
+	       (t (error "Unrecognized range in ~A" annotation))))
+       finally (return (type (first annotations)))))
+
+(defun train-on-sentence (class sentence classifier fspace)
+  (train-classifier classifier (sentence-features sentence fspace) class))
+
+(defun sentence-features (sentence fspace)
+  (mapcar (curry 'get-feature-vector-id fspace)
+	  (filter-if 'stopword-p
+		     (mapcar #'get-lemma-for-id
+			     (phrase-words sentence)))))
+
+
+;; Classify
+
+(defun classify-sentences (messages classifier labels)
+  (let ((fspace (sentence-classifier-feature-space classifier))
+	(bayes (sentence-classifier-classifier classifier)))
+    (loop for message in messages nconc
+	 (let ((annos (msg-annotations message)))
+	   (loop for sentence in (message-sentences message)
+		 for i from 0 collect
+		(cons (sentence-binary-class i annos labels)
+		      (predict-sentence sentence bayes fspace)))))))
+
+(defun predict-sentence (sentence classifier fspace)
+  (predict-class classifier 'yes (sentence-features sentence fspace)))

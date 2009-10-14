@@ -10,16 +10,22 @@
     :licence "Media Lab Proprietary: non-profit application use"
     :components ((:file "package")
 		 (:file "csv-import")
+		 (:file "classifiers")
+		 (:file "bayes")
+		 (:file "naive-bayes")
 		 (:file "lam-utils")
 		 (:file "lam-message-db")
 		 (:file "lam-patterns")
 		 (:file "lam-lexical")
 		 (:file "lam-listserv-mining")
+		 (:file "lam-crf")
+		 (:file "lam-lda")
 		 (:file "lam-divisi"))
 ;;		 (:file "webtest"))
     :serial t
     :in-order-to ((load-op (compile-op :smart)))
-    :depends-on (:stdutils :cl-json :hunchentoot :drakma :elephant :langutils :f-underscore))
+    :depends-on (:stdutils :cl-json :hunchentoot :drakma :elephant :langutils :f-underscore
+			   :trivial-shell :cxml :cxml-stp))
 
 (defsystem #:smart-explorer    
     :description "SMART: Semantic Manipulation, Analytics, Reporting and Terms"

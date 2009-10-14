@@ -12,7 +12,8 @@
    (udate :accessor udate :derived-fn (lambda (inst)
 					(values (parse-message-time (date inst)) t))
 	  :slot-deps (date))
-   (body :accessor body :initarg :body)))
+   (body :accessor body :initarg :body)
+   (calais :accessor calais :initarg :calais :initform nil)))
    
 
 (defparameter *print-message-body* nil)
@@ -31,7 +32,7 @@
   (print (body (get-message msg)) stream))
 
 (defun get-message-by-url (url)
-  (get-instance-by-value 'message 'url url))
+  (get-instance-by-value 'lam-message 'url url))
 
 (defun rebuild-index (class indexed-slot)
   (let ((index (find-inverted-index class indexed-slot)))
@@ -443,15 +444,27 @@
    (version :accessor version :initarg :version 
 	    :initform *msg-annotation-version*)))
 
+(defmethod print-object ((anno msg-annotation) stream)
+  (format stream "#<MSG-ANNO '~A'>" (type anno)))
+
 (defun make-msg-annotation (message type &optional range notes)
-  (make-instance 'msg-annotation
-		 :message message
-		 :type type
-		 :range range
-		 :notes notes))
+  (ensure-transaction ()
+    (make-instance 'msg-annotation
+		   :message message
+		   :type type
+		   :range range
+		   :notes notes)))
 
 (defun msg-annotations (message)
   (get-instances-by-value 'msg-annotation 'message message))
+
+(defun msg-annotations-by-type (type)
+  (remove-nulls
+   (map-class (lambda (anno)
+		(when (eq (type anno) type)
+		  anno))
+	      'msg-annotation
+	      :collect t)))
 
 (defpclass text-annotation ()
   ((message :accessor message :initarg :message :index t)
@@ -461,6 +474,9 @@
    (version :accessor version :initarg :version 
 	    :initform *msg-annotation-version*)))
 
+(defmethod print-object ((anno text-annotation) stream)
+  (format stream "#<TEXT-ANNO '~A'>" (type anno)))
+
 (defun make-text-annotation (message type start end)
   (make-instance 'text-annotation
 		 :message message
@@ -468,15 +484,53 @@
 		 :end end 
 		 :type type))
 
-(defun msg-annotation->phrase (annotation)
-  (make-instance 'phrase 
-		 :document (message-doc (get-message (message annotation)))
-		 :type (type annotation)
-		 :start (start annotation)
-		 :end (end annotation)))
+(defun text-annotation->phrase (annotation &optional (expansion 0))
+  (let ((doc (message-doc (get-message (message annotation)))))
+    (make-instance 'phrase 
+		   :document doc
+		   :type (type annotation)
+		   :start (max (- (start annotation) expansion) 0)
+		   :end (min (+ (end annotation) expansion) 
+			     (1- (length (document-text doc)))))))
+
+(defun text-annotation->string (annotation &optional (expansion 0) with-tags)
+  (phrase->string (text-annotation->phrase annotation expansion) :with-tags with-tags))
+
+(defun print-text-annotation (annotation &key with-tags (expansion 0))
+  (format t "~A: ~A~%"
+	  (type annotation)
+	  (text-annotation->string annotation expansion with-tags)))
 
 (defun text-annotations (message)
   (get-instances-by-value 'text-annotation 'message message))
+
+(defun all-text-annotations ()
+  (get-instances-by-class 'text-annotation))
+
+(defun all-text-annotations-by-type (type)
+  (select-if (f (anno) (eq type (type anno)))
+	     (all-text-annotations)))
+
+(defun all-text-annotated-messages ()
+  (remove-duplicates
+   (remove-nulls 
+    (map-class #'message 'text-annotation :collect t))))
+
+(defun review-annotation-type (type &optional (expansion 0))
+  (mapcar (f (anno) 
+	    (print-text-annotation anno :expansion expansion)
+	    (format t "~%"))
+	  (all-text-annotations-by-type type)))
+
+;;
+;; Annotation patterns
+;;
+
+(defun find-type-pairs ()
+  (let ((msgs (all-text-annotated-messages)))
+    (loop for msg in msgs collect
+	 (select-if (f (anno) (member (type anno) '(symptom intervention)))
+		    (text-annotations msg)))))
 
 ;;
 ;; Interactive annotation
@@ -506,7 +560,7 @@
 (defmacro while-annotating ((expr) &body options)
   (assert (find 'return (flatten options)))
   `(loop
-      (let ((,expr (read)))
+      (let ((,expr (progn (princ #\>) (princ #\Space) (read))))
 	(cond ,@options))))
 
 (defun annotate-message (message)
@@ -527,6 +581,8 @@
       ((eq expr 'r) (signal 'repeat-annotation))
       ((eq expr 'x) (return-from annotate-message))
       ((eq expr 'd) (drop-instances (msg-annotations message)))
+      ((symbolp expr) 
+       (make-msg-annotation message expr))
       ((listp expr)
        (apply #'make-msg-annotation message expr)))
     ;; Phrase level annotations
@@ -540,26 +596,23 @@
 	   ((eq expr 'x)
 	    (return-from annotate-message))
 	   ((listp expr)
-	    (dbind (type start end) expr
+	    (dbind (type start &optional end) expr
+	      (when (null end)
+		(setf end start))
 	      (make-text-annotation message type 
 				    (+ (phrase-start sentence) start)
 				    (+ (phrase-start sentence) end))))
 	   (t (return))))))
-
-(defun print-message (message)
-  (awhen (msg-annotation message)
-    (with-slots (type subtype notes) it
-	(format t "Type: ~A  Subtype: ~A  Notes: ~A"
-		type subtype notes)))
-  (print-message-body message))
-
 
 (defun print-sentence (message sphrase &key marks annotations)
   (let* ((words (tokens-for-ids (phrase-words sphrase))))
     (aif (and annotations (annotations-for-phrase message sphrase))
       (loop for annotation in it do
 	   (with-slots (start end type) annotation
-	     (format t "~A:~A ~A~%" start end type)))
+	     (format t "~A:~A ~A~%" 
+		     (- start (phrase-start sphrase))
+		     (- end (phrase-start sphrase))
+		     type)))
       (format t "~%"))
     (when marks
       (loop 
@@ -571,10 +624,136 @@
 	 (format t "~v,A " (max (length word) 3) word))
     (format t "~%")))
 
-(defun annotations-for-phrase (message sphrase)
+(defun annotations-for-phrase (message sphrase &optional filter)
   (let ((start (phrase-start sphrase))
 	(end (phrase-end sphrase)))
-    (select-if (f_ (and (>= (start _) start)
-			(<= (end _) end)))
-	       (text-annotations message))))
-  
+    (with-transaction ()
+      (select-if (f_ (and (>= (start _) start)
+			  (<= (end _) end)))
+		 (let ((annos (text-annotations message)))
+		   (if filter
+		       (filter-annotations filter annos)
+		       annos))))))
+
+(defun review-annotations (messages)
+  (loop for message in messages
+     for annos = (text-annotations message)
+     when annos 
+     do (progn (print (msg-annotations message))
+	       (print-message-body message)
+	       (mapc #'print-text-annotation annos))))
+
+
+;; ==============================
+;;  OpenCalais
+;; ==============================
+
+(defparameter *calais-license-key* "nf4c5sc56xczyax4d6syzr3t")
+(defparameter *calais-params*
+"<c:params xmlns:c=\"http://s.opencalais.com/1/pred/\" xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">
+
+  <c:processingDirectives c:contentType=\"text/txt\" c:enableMetadataType=\"GenericRelations,SocialTags\" c:outputFormat=\"application/json\" c:docRDFaccesible=\"true\" >
+  </c:processingDirectives>
+
+  <c:userDirectives c:allowDistribution=\"true\" c:allowSearch=\"true\" c:externalID=\"ianeslick\" c:submitter=\"ABC\">
+  </c:userDirectives>
+
+  <c:externalMetadata>
+  </c:externalMetadata>
+
+</c:params>")
+
+(defun open-calais-message (msg &optional force)
+  (let ((*use-strict-json-rules* nil))
+    (declare (special *use-strict-json-rules*))
+    (if (or force (not (calais msg)))
+	(setf (calais msg) (open-calais (body msg)))
+	(calais msg))))
+
+(defun open-calais (content)
+  (ignore-errors 
+    (let ((stream (drakma:http-request "http://api.opencalais.com/enlighten/rest/"
+				     :parameters 
+				     `(("licenseID" . ,*calais-license-key*)
+				       ("content" . ,content)
+				       ("paramsXML" . ,*calais-params*))
+				     :want-stream t)))
+      (unwind-protect (json::decode-json stream)
+	(close stream)))))
+
+(defun calais-type-group-entries (response group)
+  (select-if (lambda (entry)
+	       (equal (assoc-get :--type-group (rest entry)) group))
+	     (rest response)))
+
+(defun calais-msg-types (message)
+  (awhen (calais-type-group-entries (calais message) "topics")
+    (mapcar (lambda (entry)
+	      (assoc-get :category-name (rest entry)))
+	    it)))
+
+(defun calais-health-type-p (message)
+  (member "Health_Medical_Pharma"
+	  (calais-msg-types message)
+	  :test #'equal))
+
+(defun calais-entities (message)
+  (awhen (calais-type-group-entries (calais message))
+    nil))
+
+
+;; ==========================
+;; ASpell
+;; ==========================
+
+(defstruct aspell-process 
+  input output procid)
+
+;;(defparameter *aspell-process*)
+	   
+;; ==========================
+;; UMLS quick dict
+;; ==========================
+
+
+(defvar *umls-dictionary* (make-hash-table :test #'equal))
+(defvar *umls-term-dictionary* (make-hash-table))
+
+(defun lookup-umls-term-count (term)
+  (gethash (id-for-token term) *umls-term-dictionary*))
+
+(defun umls-term-matches (terms)
+  (loop for term in terms
+     when (lookup-umls-term-count term)
+     collect (if (stringp term)
+		 term
+		 (token-for-id term))))
+
+(defun count-umls-term-matches (terms)
+  (let ((mcount (length (umls-term-matches terms)))
+	(tcount (length terms)))
+    (values mcount (coerce (/ mcount tcount) 'float) tcount)))
+
+(defun quick-import-umls-data (file)
+  (with-open-file (stream file :direction :input)
+    ;; headers
+    (read-line stream) 
+    (loop 
+       for line = (read-line stream nil nil)
+       for i from 0
+       for fullspec = (parse-umls-fullyspecified-words line)
+       while fullspec
+       do 
+	 (setf (gethash fullspec *umls-dictionary*) t)
+	 (loop for word in (extract-words fullspec)
+	    for i from 0 do
+	      (unless (stopword-p word)
+		(incf-hash (id-for-token word) *umls-term-dictionary*)))
+       when (= 0 (mod i 10000)) do (print i))))
+
+(defun parse-umls-fullyspecified-words (entry)
+  (awhen (third (parse-umls entry))
+    (string-downcase it)))
+
+(defun parse-umls (entry)		    
+  (split-sequence:split-sequence #\Tab entry))
