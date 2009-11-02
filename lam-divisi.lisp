@@ -124,7 +124,8 @@
 			 (remove-if (lambda (token)
 				      (let ((len (length token)))
 					(or (> len 30)
-					    (not (alpha-char-p (char token 0))))))
+					    (not (alpha-char-p (char token 0)))
+					    (bad-chars-p token))))
 				    (tokens-for-ids 
 				     (remove-if (lambda (term)
 						  (and stopwords
@@ -132,6 +133,12 @@
 							   (stopword? term))))
 						terms)))))))
     (if qualifiers (remove-leading-qualifiers cleaned) cleaned)))
+
+(defun bad-chars-p (string)
+  (map-across (lambda (char)
+		(when (> (char-code char) 128) (return-from bad-chars-p t)))
+	      string)
+  nil)
 
 (defun filter-window-pairs (window-recs phrases)
   (flatten1

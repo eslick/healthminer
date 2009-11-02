@@ -362,6 +362,66 @@
      'message)
     (setf *message-map* hash)))
 
+;; LDA topic vector caching 
+
+(defun insert-message-topics (messages filename)
+  (with-lda-reader (reader filename)
+    (loop for message in messages 
+       do (set-message-lda-topics message reader))))
+
+(defun set-message-lda-topics (message reader)
+  (let ((mrec (get-message-rec message)))
+    (when (< (length mrec) 4)
+      (setf (nthcdr 3 mrec) (cons nil nil)))
+    (setf (fourth mrec) 
+	  (make-lda-message-annotation-vector message (funcall reader)))))
+
+(defun make-lda-vector (message start end)
+  (ignore-errors (subseq (message-topics message) start (1+ end))))
+
+(defun chunk-has-topic (message chunk topic)
+  (ignore-errors
+    (let ((topics (message-topics message)))
+      (member topic (array->list 
+		     (subseq topics
+			     (phrase-start chunk)
+			     (min (1+ (phrase-end chunk))
+				  (length topics))))))))
+
+(defun topic-distribution (message &optional topic-labels)
+  (let* ((topics (message-topics message))
+	 (total (length topics)))
+    (mapcar (f (entry)
+	      (cons (aif-ret (and topic-labels (gethash (car entry) topic-labels))
+		      (car entry))
+		    (coerce (/ (cdr entry) total) 'float)))
+	    (rest (sort (histogram 
+			 (array->list 
+			  (message-topics message)))
+			#'>
+			:key #'cdr)))))
+
+(defun windows-for-topic (message topic &key (size 7) ids)
+  (let ((terms (message-words message)))
+    (loop 
+       with last-pos = nil 
+       for pos in (topic-positions message topic)
+       when (or (not last-pos) (< last-pos (+ pos (/ size 2))))
+       collect (prog1 
+		   (let ((window (position-window pos size terms)))
+		     (if ids window
+			 (tokens-for-ids window)))
+		 (setf last-pos pos)))))
+  
+
+(defun topic-positions (message topic)
+  (loop for i from 0
+        for top across (message-topics message)
+        when (eq top topic)
+        collect i))
+
+;; Chunk caching
+
 (defun get-extended-chunks (doc)
   (append (get-nx-chunks doc)
 	  (get-event-chunks doc)
@@ -408,16 +468,18 @@
 (defun mmap-words (rec) (vector-document-words (mmap-vdoc rec)))
 (defun mmap-vdoc (rec) (second rec))
 (defun mmap-chunks (rec) (third rec))
+(defun mmap-topics (rec) (fourth rec))
 
 (defun get-message-rec (msg)
   (typecase msg
     (number (gethash msg *message-map*))
     (message (gethash (get-message-id msg) *message-map*))))
 
+(defun message-words (msg-ref) (mmap-words (get-message-rec msg-ref)))
 (defun message-lemmas (msg-ref) (mmap-lemmas (get-message-rec msg-ref)))
 (defun message-doc (msg-ref) (mmap-vdoc (get-message-rec msg-ref)))
 (defun message-chunks (msg-ref) (mmap-chunks (get-message-rec msg-ref)))
-
+(defun message-topics (msg-ref) (mmap-topics (get-message-rec msg-ref)))
 
 ;;;; ==========================================
 ;;;; UTILITY MACROS
@@ -434,7 +496,7 @@
 ;;;; ANNOTATIONS
 ;;;; ==========================================
 
-(defparameter *msg-annotation-version* 1)
+(defparameter *msg-annotation-version* 2)
 
 (defpclass msg-annotation ()
   ((message :accessor message :initarg :message :index t)
@@ -474,8 +536,15 @@
    (version :accessor version :initarg :version 
 	    :initform *msg-annotation-version*)))
 
+(defpclass text-annotation-archive (text-annotation)
+  ())
+
 (defmethod print-object ((anno text-annotation) stream)
   (format stream "#<TEXT-ANNO '~A'>" (type anno)))
+
+(defun archive-text-annotations (annotations)
+  (loop for annotation in annotations do
+       (change-class annotation 'text-annotation-archive)))
 
 (defun make-text-annotation (message type start end)
   (make-instance 'text-annotation
@@ -500,6 +569,11 @@
   (format t "~A: ~A~%"
 	  (type annotation)
 	  (text-annotation->string annotation expansion with-tags)))
+
+(defmethod get-lda-vector ((anno text-annotation))
+  (make-lda-vector (message anno)
+		   (start anno)
+		   (end anno)))
 
 (defun text-annotations (message)
   (get-instances-by-value 'text-annotation 'message message))

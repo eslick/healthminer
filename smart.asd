@@ -12,20 +12,21 @@
 		 (:file "csv-import")
 		 (:file "classifiers")
 		 (:file "bayes")
+		 (:file "swirl")
 		 (:file "naive-bayes")
 		 (:file "lam-utils")
 		 (:file "lam-message-db")
 		 (:file "lam-patterns")
 		 (:file "lam-lexical")
-		 (:file "lam-listserv-mining")
 		 (:file "lam-crf")
 		 (:file "lam-lda")
+		 (:file "lam-listserv-mining")
 		 (:file "lam-divisi"))
 ;;		 (:file "webtest"))
     :serial t
     :in-order-to ((load-op (compile-op :smart)))
     :depends-on (:stdutils :cl-json :hunchentoot :drakma :elephant :langutils :f-underscore
-			   :trivial-shell :cxml :cxml-stp))
+			   :trivial-shell :cxml :cxml-stp :cffi))
 
 (defsystem #:smart-explorer    
     :description "SMART: Semantic Manipulation, Analytics, Reporting and Terms"

@@ -21,11 +21,8 @@
   (open-store *listserv-db-spec*)
   (ensure-stopword-hash)
   (get-message-map)
-  (setf subset (dataset-data (last1 (all-datasets))))
-  (setf terms (seti terms (second (dataset-data (third (all-datasets))))))
-  (setf termhash (make-hash-table))
-  (loop for term in terms do
-       (setf (gethash (id-for-token term) termhash) t))
+  (insert-message-topics (get-instances-by-class 'message) 
+			 "/Users/eslick/temp/100topics-full/topic.state")
   t)
 
 (defpclass dataset ()
@@ -99,6 +96,14 @@
 				(term-positions "?" (vector-document-words vdoc))
 				(term-positions "!" (vector-document-words vdoc)))
 			#'< ))))
+
+(defun swirl-parse-message (message &optional num)
+  (if num
+      (swirl-parse-sentence (nth num (message-sentences message)))
+      (mapcar #'swirl-parse-sentence (message-sentences message))))
+
+(defun swirl-parse-sentence (sentence)
+  (swirl-parse-string (phrase->string sentence)))
 
 ;; ============================
 ;; Filter windows by terms
@@ -638,8 +643,12 @@
 				     (find-enclosing-category type) type))
 		(cons "size" (/ (count type types) (length types)))
 		(cons "count" (count type types))
-		(cons "annotated" (/ (count type text-types)
-				     (count type types)))))))
+		(cons "annotated" 
+		      (/ (count type text-types)
+			 (length text-types))
+;;		      (/ (count type text-types)
+;;			 (count type types))
+		      )))))
 	       
 (defun dump-msg-treemap (&optional (file "~/msg-map.json"))
   (with-output-file (stream file)
