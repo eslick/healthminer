@@ -82,8 +82,6 @@
 (defun review-term-lexical-windows (term size &optional count)
   (more (mapcar 'concat-words (if count (subseq #1=(term-lexical-windows term size) 0 count)
 				  #1#))))
-
-
 		
 
 ;; ===========================================================
@@ -148,10 +146,12 @@
     (g 'general)
     (j 'junk)))
 
-(defun histogram (list)
-  (let ((table (make-hash-table :test #'equal)))
-    (mapcar (lambda (elt) (incf-hash elt table)) list)
-    (hash-items table)))
+(defun histogram (list &key (test #'equalp) key)
+  (let ((table (make-hash-table :test test)))
+    (mapcar (lambda (elt) 
+	      (when key (setf elt (funcall key elt)))
+	      (incf-hash elt table)) list)
+    (sort (hash-items table) #'> :key #'cdr)))
 
 (defun print-evaluation (evaluation &optional (label-converter 'convert-fragment-labels))
   (when (> (length (evaluation-results evaluation)) 2)
@@ -201,8 +201,9 @@
      for i from 1 do
      (progn 
        (let ((value (funcall fn elt)))
-	 (when print 
-	   (print value)))
+	 (cond ((symbolp print) (funcall print value))
+	       ((null print) nil)
+	       (t (print value))))
        (when (= (mod i size) 0)
 	 (when (eq (read-char) #\q)
 	   (return nil))))))

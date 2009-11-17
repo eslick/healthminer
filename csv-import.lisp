@@ -44,28 +44,32 @@
   (let ((list nil)
 	(escape-mode nil)
 	(start 0))
-  (flet ((escape-p (c)
-	   (member c escape-chars))
-	 (toggle-escape ()
-	   (if escape-mode 
-	       (setq escape-mode nil)
-	       (setq escape-mode t))))
-    (loop for char across line 
-	  for offset from 0 do
-	 (cond ((escape-p char)
-		(toggle-escape))
-	       ((and (eq char field-separator) 
-		     (not escape-mode))
-		(if (= start offset) 
-		    (progn 
-		      (incf start)
-		      (push nil list))
-		    (progn 
-		      (let ((entry (subseq line start offset)))
-			(when drop-escapes
-			  (delete-if #'escape-p entry))
-			(push entry list))
-		      (setq start (1+ offset)))))))
+  (labels ((escape-p (c)
+	     (member c escape-chars))
+	   (toggle-escape ()
+	     (if escape-mode 
+		 (setq escape-mode nil)
+		 (setq escape-mode t)))
+	   (extract-entry (begin end)
+	     (let ((entry (subseq line begin end)))
+	       (if drop-escapes
+		   (push (delete-if #'escape-p entry) list)
+		   (push entry list)))
+	     (setq start (1+ end))))
+    (loop 
+       for char across line 
+       for offset from 0 do
+       (cond ((escape-p char)
+	      (toggle-escape))
+	     ((and (eq char field-separator)
+		   (not escape-mode))
+	      (if (= start offset) 
+		  (progn 
+		    (incf start)
+		    (push nil list))
+		  (extract-entry start offset)))))
+    (when (< start (length line))
+      (extract-entry start (1- (length line))))
     (nreverse list))))
 
 (defmethod extract-multiple-value-line (line)

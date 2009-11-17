@@ -117,4 +117,155 @@
 				 (length results))
 		      'float)))))
 
+;;; ============================================
+
+;;
+;; Tweet DB
+;;
+
+(defparameter *tweet-db* (make-hash-table))
+(defparameter *tweet-db-tdf* (make-hash-table :test #'equal))
+
+(defun import-tweet-csv-file (filename)
+  (with-open-file (stream filename)
+    (read-line stream)
+    (loop 
+       for line = (read-line stream nil nil)
+       while line
+       do (import-tweet-csv line))
+    (compute-db-tdfs)))
+
+;;(defun remove-duplicate-tweets ()
+;;  (let ((new (make-hash-table)))
+;;    (maphash 
+
+(defun compute-db-tdfs ()
+  (setf *tweet-db-tdf* 
+	(compute-tdfs 
+	 (mapcar (f (item) (caddr item))
+		 (hash-items *tweet-db*))))
+  (let ((total (hash-table-count *tweet-db*)))
+    (maphash (f (term count)
+	       (setf (gethash term *tweet-db-tdf*)
+		     (/ count total)))
+	     *tweet-db-tdf*)))
+	   
+
+(defun compute-tdfs (feature-sets)
+  (let ((hash (make-hash-table :test #'equal)))
+    (loop for set in feature-sets
+	 do (mapc (f (term) (incf-hash term hash)) 
+		  (remove-duplicates set :test #'equal)))
+    hash))
+
+(defun import-tweet-csv (string)
+  (let ((list (csv->list string)))
+    (when (> (length list) 1)
+      (dbind (idst tweet) list
+	(setf (gethash (parse-integer idst) *tweet-db*)
+	      (list tweet (tweet-features tweet))))))) ;; (equal intent "Y")))))))
+
+(defun tweet-features (tweet)
+  (remove-if (f (term)
+	       (or (stopword? (id-for-token term))
+		   (< (length term) 2)))
+	     (extract-words 
+	      (mvretn 3 (langutils::tokenize-string 
+			 (string-downcase tweet))))))
+
+;;
+;; Search DB
+;;
+
+(defun search-tweet-db (query &key (max nil) (features nil))
+  (declare (optimize (speed 3) (safety 0) (debug 0) (space 0))
+	   (fixnum max) (boolean features))
+  (labels ((tweet-term-match (features terms)
+	     (declare (list features terms))
+	     (every (f (term) (member term features :test #'equal)) terms)))
+    (declare (dynamic-extent (function tweet-term-match)))
+    (let ((results nil)
+	  (terms (tweet-features query))
+	  (count 0))
+      (declare (dynamic-extent terms count)
+	       (list terms results)
+	       (fixnum count))
+      (time (maphash (f (id rec)
+		 (declare (ignore id)
+			  (fixnum id) (list rec))
+		 (when (tweet-term-match (second rec) terms)
+		   (push (if features (second rec) (first rec))
+			 results)
+		   (when (and max (< max (incf count)))
+		     (return-from search-tweet-db results))))
+	       *tweet-db*))
+      results)))
+
+
+;;
+;; Tag cloud 2 
+;;
+
+(defun compute-tag-cloud (query &key (max 100) (tags 30))
+  (declare (optimize speed) (safety 0) (debug 0))
+  (let* ((qterms (tweet-features query))
+	 (qdocs (mapcan (f (term) (search-tweet-db term :max max :features t)) qterms))
+	 (chash (make-hash-table :test #'equal)))
+    (declare (list qterms qdocs)
+	     (hash-table chash))
+    (mapc (f (terms) 
+	    (declare (list terms))
+	    (dolist (term terms) ;;(remove-duplicates terms :test #'equal)) 
+	      (incf-hash term chash)))
+	  qdocs)
+;;    (normalize-terms chash *tweet-db-tdf*)
+    (top-n (remove-if (f (item) (member (car item) qterms :test #'equal))
+		      (sort (hash-items chash) #'> :key #'cdr) )
+	   tags)))
+
+(defun normalize-terms (chash tfhash)
+  (maphash (f (term count) 
+	     (setf (gethash term chash) 
+		   (/ count (gethash term tfhash))))
+	   chash))
+	   
+
+
+;;
+;; Tag cloud 1
+;;
+
+(defun compute-tag-cloud-v1 (query)
+  (let ((qterms (tweet-features query))
+	(tweets (sorted-tweets (search-tweet-db query t)))
+	(chash (make-hash-table :test #'equal)))
+    (mapc (curry2 #'update-tag-counts chash) tweets)
+    (top-n (sort (gethash (first qterms) chash)
+		 #'> :key #'cdr)
+	   20)))
+
+(defun sorted-tweets (tweets)
+  (sort (loop for tweet in tweets
+	   collect (sort (copy-list tweet) #'string<))
+	#'string<
+	:key #'first))
+
+(defun update-tag-counts (tweet hash)
+  (labels ((rec (counts cterm terms)
+	     (when terms
+	       (loop for term in terms do
+		    (setf counts (assoc-incf term counts)))
+	       (setf (gethash cterm hash) counts)
+	       (rec (gethash (first terms) hash) (first terms) (rest terms)))))
+    (rec (gethash (first tweet) hash) (first tweet) (rest tweet))))
+       
+
+(defun assoc-incf (elt alist)
+  (aif (assoc elt alist :test #'equal)
+       (progn (incf (cdr it)) alist)
+       (apush elt 1 alist)))
+
+    
+
+
 

@@ -22,6 +22,11 @@
 	(get-symptom-cxml))))
     hash))
 
+(defun symptom-ngrams (onto-hash)
+  (loop for symptom in (hash-values onto-hash)
+       collect (append (extract-words symptom)
+		       (list 'SYMP))))
+
 (defun formal-symptom-matches (symptom-strings onto-hash)
   (loop for string in symptom-strings collect
        (loop for word in (extract-words string)
@@ -40,3 +45,4 @@
 (defun annotation-symptom-matches (type onto-hash)
   (formal-symptom-matches (mapcar 'text-annotation->string (all-text-annotations-by-type type))
 			  onto-hash))
+

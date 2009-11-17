@@ -373,7 +373,7 @@
   (let ((mrec (get-message-rec message)))
     (when (< (length mrec) 4)
       (setf (nthcdr 3 mrec) (cons nil nil)))
-    (setf (fourth mrec) 
+    (setf (fourth mrec)
 	  (make-lda-message-annotation-vector message (funcall reader)))))
 
 (defun make-lda-vector (message start end)
@@ -530,17 +530,20 @@
 
 (defpclass text-annotation ()
   ((message :accessor message :initarg :message :index t)
-   (type :accessor type :initarg :type)
+   (type :accessor type :initarg :type :initform :none)
    (start :accessor start :initarg :start)
    (end :accessor end :initarg :end)
    (version :accessor version :initarg :version 
 	    :initform *msg-annotation-version*)))
 
+(defmethod print-object ((anno text-annotation) stream)
+  (format stream "#<TEXT-ANNO '~A'>" (type anno)))
+
 (defpclass text-annotation-archive (text-annotation)
   ())
 
-(defmethod print-object ((anno text-annotation) stream)
-  (format stream "#<TEXT-ANNO '~A'>" (type anno)))
+(defmethod print-object ((anno text-annotation-archive) stream)
+  (format stream "#<TEXT-ANARCH '~A'>" (type anno)))
 
 (defun archive-text-annotations (annotations)
   (loop for annotation in annotations do
@@ -570,10 +573,13 @@
 	  (type annotation)
 	  (text-annotation->string annotation expansion with-tags)))
 
-(defmethod get-lda-vector ((anno text-annotation))
+(defmethod get-lda-vector ((anno text-annotation) &key &allow-other-keys)
   (make-lda-vector (message anno)
 		   (start anno)
 		   (end anno)))
+
+(defmethod get-lda-vector ((phrase phrase) &key (message nil))
+  (make-lda-vector message (phrase-start phrase) (phrase-end phrase)))
 
 (defun text-annotations (message)
   (get-instances-by-value 'text-annotation 'message message))
@@ -831,3 +837,45 @@
 
 (defun parse-umls (entry)		    
   (split-sequence:split-sequence #\Tab entry))
+
+;;;;
+;;;; Verb and topic distributions
+;;;;
+
+(defun nouns+topics (message &optional label-table)
+  (pos+topics message label-table 'noun-pos-p))
+
+(defun verbs+topics (message &optional label-table)
+  (pos+topics message label-table 'verb-pos-p))
+
+(defun pos+topics (message label-table &optional (pred 'verb-pos-p) get-label)
+  (loop 
+     with text = (document-text (message-doc message))
+     with topics = (message-topics message)
+     for offset in (pospred-locations message (cond ((functionp pred) pred)
+						    ((ignore-errors (symbol-function pred)) pred)
+						    ((symbolp pred)
+						     (lambda (pos) (eq pos pred)))
+						    (t (error "Can't select pos topics using ~A"
+							      pred))))
+     for word = (token-for-id (aref text offset))
+     collect (cons word (get-topic-label (aref topics offset) label-table))))
+
+(defun pospred-locations (message pospred)
+  (loop for i from 0 
+     for pos across (document-tags (message-doc message))
+     when (funcall pospred pos)
+     collect i))
+
+
+;;;
+;;; Head verb/noun extraction test
+;;;
+
+;; Identify candidates based on head noun and leading head verb (when exists)
+;; For a message, extract pairs of symptom/treatment (classify?)
+
+;; Identify sign of influence
+;; Identify direction of influence (->, <-, -) (inc. cause/assoc)
+
+

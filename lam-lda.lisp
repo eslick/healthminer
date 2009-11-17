@@ -95,15 +95,17 @@
     (with-open-file (stream filename)
       (do-stream-lines (line stream)
 	(unless (eq (aref line 0) #\#)
-	  (dbind (topic label &rest rest) 
+	  (dbind (topic label &rest rest)
 	      (extract-words line)
 	    (declare (ignore rest))
 	    (hash-put hash (parse-integer topic) label)))))
     hash))
 
 (defun get-topic-label (topic label-table)
-  (let ((label (gethash topic label-table)))
-    (unless (equal label "CRUFT") label)))
+  (if label-table
+      (let ((label (gethash topic label-table)))
+	(unless (equal label "CRUFT") label))
+      topic))
 
 (defun message-annotation-topic-distribution (topic-labels)
   "For each message-level annotation, capture the topic histogram"
