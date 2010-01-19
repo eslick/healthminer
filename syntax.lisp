@@ -180,7 +180,7 @@
 	     (lambda (l) (declare (ignore l)))
 	     tree))
 
-(defun find-phrase (type verb tree &optional (node-select #'identity))
+(defun find-tree-phrase (type verb tree &optional (node-select #'identity))
   (walk-tree (lambda (n s)
 	       (print s)
 	       (cond ((and (eq (first n) type) (not (every #'null s)))
@@ -196,13 +196,13 @@
 	     tree))
 
 (defun find-phrase-from-words (type words tree &optional (leaf-select #'identity))
-  (mapc #'(lambda (x) (aif (find-phrase type x tree leaf-select)
+  (mapc #'(lambda (x) (aif (find-tree-phrase type x tree leaf-select)
 			   (return-from find-phrase-from-words it)))
 	words)
   nil)
 
 (defun find-vp-from-words (words tree)
-  (mapc #'(lambda (x) (aif (find-phrase 'vp x tree #'verb-leaf-p)
+  (mapc #'(lambda (x) (aif (find-tree-phrase 'vp x tree #'verb-leaf-p)
 			   (return-from find-vp-from-words it)))
 	words)
   nil)

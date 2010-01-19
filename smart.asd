@@ -19,18 +19,21 @@
 		 (:file "unifier")
 		 (:file "syntax")
 		 (:file "lam-utils")
-		 (:file "lam-crf")
-		 (:file "lam-lda")
-		 (:file "lam-message-db")
+		 (:file "lam-symptoms")
 		 (:file "lam-patterns")
 		 (:file "lam-lexical")
+		 (:file "lam-lda")
+		 (:file "lam-message-db")
+		 (:file "lam-crf")
+		 (:file "lam-crf-fields")
+		 (:file "lam-crf-em")
 		 (:file "lam-listserv-mining")
 		 (:file "lam-divisi"))
 ;;		 (:file "webtest"))
     :serial t
     :in-order-to ((load-op (compile-op :smart)))
     :depends-on (:stdutils :cl-json :hunchentoot :drakma :elephant :langutils :f-underscore
-			   :trivial-shell :cxml :cxml-stp :cffi))
+			   :trivial-shell :cxml :cxml-stp :cffi :closure-html))
 
 (defsystem #:smart-explorer    
     :description "SMART: Semantic Manipulation, Analytics, Reporting and Terms"

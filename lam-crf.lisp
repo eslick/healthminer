@@ -7,27 +7,33 @@
 (defparameter *testing-filename* "/Users/eslick/temp/crf-testing-set.dat")
 
 (defun train-lam-crf (messages template-filename model-filename ngrams 
-		      &key (topics t) (crf-hash nil) all-p (c-param 1.0))
+		      &key (topics t) (crf-hash nil) all-p (c-param 0.5))
   (write-crf-data-file messages *training-filename* ngrams 
 		       :topics topics :crf-hash crf-hash :all-p all-p)
-  (let* ((proc (trivial-shell::create-shell-process
-	       (format nil "crf_learn -c ~A -p 4 -f 5 ~A ~A ~A" ;; -c 0.5 -t -p 2 -f 2
-		       c-param
-		       template-filename
-		       *training-filename*
-		       model-filename)
-	       nil))
-	 (out   (ccl::external-process-output-stream proc))
-	 (error (ccl::external-process-error-stream proc)))
-    (unwind-protect
-	 (loop while (trivial-shell::process-alive-p proc) do
-	      (progn
-		(sleep 5)
-		(loop for line = (read-line out nil)
-		   while line
-		   do (print line))))
-      (close out)
-      (close error))))
+  (shell-call "crf_learn -p 2 -c ~A -f 2 ~A ~A ~A" ;; -c 0.5 -t -p 2 -f 2
+	      c-param
+	      template-filename
+	      *training-filename*
+	      model-filename))
+
+;;   (let* ((proc (trivial-shell::create-shell-process
+;; 	       (format nil "crf_learn -c ~A -f 5 ~A ~A ~A" ;; -c 0.5 -t -p 2 -f 2
+;; 		       c-param
+;; 		       template-filename
+;; 		       *training-filename*
+;; 		       model-filename)
+;; 	       nil))
+;; 	 (out   (ccl::external-process-output-stream proc))
+;; 	 (error (ccl::external-process-error-stream proc)))
+;;     (unwind-protect
+;; 	 (loop while (trivial-shell::process-alive-p proc) do
+;; 	      (progn
+;; 		(sleep 5)
+;; 		(loop for line = (read-line out nil)
+;; 		   while line
+;; 		   do (print line))))
+;;       (close out)
+;;       (close error))))
 
 
 ;;;
@@ -48,6 +54,23 @@
 	    messages))
     t))
 
+(defvar topic-labels nil)
+(defparameter *unify-topics-p* t)
+
+(defun map-topics (topics)
+  (if *unify-topics-p* 
+      (aprog1 (make-array (list (length topics))
+			  :initial-contents (map-across #'map-topic topics))
+	(when (not (eq (length it) (length topics)))
+	  (break)))
+      topics))
+
+(defun map-topic (topic)
+  (aif (gethash topic topic-labels)
+       (if (not (equal it "CRUFT")) "DOM" "NA")
+       "NA"))
+	   
+
 (defun write-crf-message (stream message labeler &key (use-topics t) all-sentences)
   "Given a stream, a labeler, and a set of messages"
   ;; Header
@@ -57,7 +80,7 @@
 	  (when labeler "NONE"))
   ;; Dump sentence
   (let ((mdoc (message-doc message))
-	(topics (and use-topics (message-topics message)))
+	(topics (and use-topics (map-topics (message-topics message))))
 	(labels (when labeler (phrase-label-message message labeler))))
     (dolist (sentence (message-sentences message))
       (when (or (not labels) all-sentences (sentence-has-label? sentence labels))
@@ -85,7 +108,7 @@
 ;;		      (random-string :length (length (get-lemma (token-for-id (aref words i)))))
 		  (get-lemma (token-for-id (aref words i)))
 		  (aref tags i)
-		  (when topics (aref topics i))
+		  (when topics (or (ignore-errors (aref topics i)) "NA"))
 		  (when labels (or label "NONE"))))
   (format stream "~%"))
 
@@ -100,7 +123,8 @@
 
 (defun ngram-as-ids (ngram)
   (when ngram
-    (let ((ids (mapcar #'id-for-token (subseq ngram 0 (1- (length ngram))))))
+    (let ((ids (mapcar (compose #'id-for-token #'get-lemma) 
+		       (subseq ngram 0 (1- (length ngram))))))
       (setf (nthcdr (1- (length ngram)) ids)
 	    (list (last1 ngram)))
       ids)))
@@ -253,11 +277,12 @@
 
 (defun classify-lam-crf (messages model-filename result-filename &optional (topics t))
   (write-crf-data-file messages *testing-filename* nil :topics topics)
-  (trivial-shell:shell-command 
-   (format nil "crf_test -m ~A -o ~A ~A"
-	   model-filename
-	   result-filename
-	   *testing-filename*)))
+;;  (trivial-shell:shell-command 
+  (shell-call "crf_test -m ~A -o ~A ~A"
+	      model-filename
+	      result-filename
+	      *testing-filename*))
+	      
 
 
     
@@ -328,49 +353,3 @@
 		 filter)
   (classify-lam-crf testing *model-filename* output :topics)
   (read-crf-labeling output))
-    
-
-;;; OLD CRF WRITER
-
-(defun write-crf-data-file-orig (messages filename &key topics msg-anno (annotations t) filter keywords)
-  (with-output-file (stream filename)
-    ;; for each message
-    (loop for message in messages
-	 for lines from 0 do
-	 (let ((text-annos (when annotations 
-			     (if filter
-				 (filter-annotations filter (text-annotations message))
-				 (text-annotations message))))
-	       (msg-annos (when annotations (msg-annotations message)))
-	       (lda-labels (when (eq topics :topics)
-			     (message-topics message))))
-	   (format stream "~A DOC ~@[~A~] ~@[~A~]~%~%" (get-message-id message)
-		   (when topics "OO") (when annotations "OO"))
-	   ;; For each sentence
-	   (loop 
-	      for sentence in (document-sentence-phrases (message-doc message))
-	      for snum from 0 
-	      for mtype = (and msg-anno (sentence-message-annotation msg-annos snum))
-	      when (or (not annotations) 
-		       (eq annotations :all)
-		       (annotations-for-phrase message sentence filter))
-	      do
-		;; For each token
-		(loop 
-		   for id in (phrase-words sentence)
-		   for offset from (phrase-start sentence)
-		   do (format stream "~A ~A ~@[~A~] ~@[~A~]~%"
-			      (token-for-id id)
-			      (aref (document-tags (phrase-document sentence)) offset)
-			      (cond ((null terms) nil)
-				    ((listp terms) (if (gethash id terms) "DOM" "OO"))
-				    ((eq terms :topics)
-				     (if (>= offset (length lda-labels))
-					 "NA"
-					 (aref lda-labels offset))))
-			      (and annotations
-				   (or (first (term-phrase-annotation text-annos offset filter))
-				       (or mtype "OO")))))
-		(format stream "~%")))
-       finally (print lines))))
-

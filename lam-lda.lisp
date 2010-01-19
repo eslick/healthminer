@@ -7,31 +7,46 @@
 ;;
 
 (defparameter *mallet-path* 
-  "/Users/eslick/Desktop/Downloads/mallet-2.0-RC4/bin/mallet")
+  "/Users/eslick/Work/fsrc/java/mallet-2.0-RC4/bin/mallet")
 
 (defun run-mallet (messages temp-name mallet-name num-topics iterations
 			state-name keys-name inferencer-name 
-		   &key dump-p run-p sentencesp)
+		   &key dump-p run-p sentencesp (type :lda))
   (when dump-p
-    (dump-for-mallet messages temp-name mallet-name :sentencesp sentencesp))
+    (dump-for-mallet messages temp-name mallet-name :sentencesp sentencesp :type type))
   (when run-p
-    (mallet-topic-train mallet-name num-topics iterations state-name keys-name inferencer-name)))
+    (mallet-topic-train mallet-name num-topics iterations state-name keys-name inferencer-name type)))
 
 (defun mallet-topic-train (mallet-name num-topics iterations 
-			   state-name keys-name inferencer-name)
-  (trivial-shell:shell-command
-   (format nil "~A train-topics --input ~A --num-topics ~A --num-iterations ~A --output-state ~A --output-topic-keys ~A --num-top-words 100 --inferencer-filename ~A";; --num-threads 4 --optimize-interval 10"
-	   *mallet-path* mallet-name num-topics iterations 
-	   state-name keys-name inferencer-name)))
+			   state-name keys-name inferencer-name &optional (type :lda))
+  (cond ((eq type :lda)
+	 (shell-call 
+;;	 (trivial-shell:shell-command
+	  (format nil "~A train-topics --input ~A --num-topics ~A --num-iterations ~A --output-state ~A --output-topic-keys ~A --num-top-words 100 --inferencer-filename ~A --num-threads 2" ;; --optimize-interval 10"
+		  *mallet-path* mallet-name num-topics iterations 
+		  state-name keys-name inferencer-name)))
+	((eq type :ngram)
+	 (shell-call
+;;	 (trivial-shell:shell-command
+	  (format nil "~A train-topics --use-ngrams --input ~A --num-topics ~A --num-iterations ~A --output-state ~A --output-topic-keys ~A --num-top-words 100 --inferencer-filename ~A --num-threads 2" 
+		  *mallet-path* mallet-name num-topics iterations 
+		  state-name keys-name inferencer-name)))))
 
-(defun dump-for-mallet (messages temp-name mallet-name &key (import-p t) sentencesp)
+(defun dump-for-mallet (messages temp-name mallet-name &key (import-p t) sentencesp (type :lda))
   (with-output-file (stream temp-name)
     (loop for message in messages do
 	 (dump-mallet-message stream message sentencesp)))
   (when import-p
-    (trivial-shell:shell-command
-     (format nil "~A import-file --input ~A --output ~A --keep-sequence --remove-stopwords"
-	     *mallet-path* temp-name mallet-name))))
+    (cond ((eq type :lda)
+	   (shell-call
+;;	   (trivial-shell:shell-command
+	    (format nil "~A import-file --input ~A --output ~A --keep-sequence --remove-stopwords"
+		    *mallet-path* temp-name mallet-name)))
+	  ((eq type :ngram)
+	   (shell-call
+;;	   (trivial-shell:shell-command
+	    (format nil "~A import-file --input ~A --output ~A --skip-header --keep-sequence-bigrams --remove-stopwords"
+		    *mallet-path* temp-name mallet-name))))))
 
 (defun dump-mallet-message (stream message &optional sentences)
   (if sentences
@@ -46,15 +61,17 @@
 	      
 	      (cleaned-divisi-tokens (message-words message)))))
 
-(defun mallet-quick-run (messages iterations &key (dump t) sentencesp)
+(defun mallet-quick-run (messages iterations &key (dump t) sentencesp (type :lda))
+  (declare (ignore sentencesp))
   (run-mallet messages 
 	      "/Users/eslick/temp/topic.raw"
 	      "/Users/eslick/temp/topic.mallet"
-	      100
+	      200
 	      iterations
 	      "/Users/eslick/temp/topic.state.gz"
 	      "/Users/eslick/temp/topic.keys"
-	      "/Users/eslick/temp/topic.inferencer"))
+	      "/Users/eslick/temp/topic.inferencer"
+	      :dump-p dump :run-p t :type type))
 
 
 ;;

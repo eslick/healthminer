@@ -112,6 +112,24 @@
 		   :dataset (if (listp dataset) "List argument" dataset)
 		   :results results)))
 
+(defmacro shell-call (expression &rest args)
+  `(let* ((fmt-string ,expression)
+	  (proc (trivial-shell::create-shell-process
+		 (format nil fmt-string ,@args)
+		 nil))
+	  
+	  (out   (ccl::external-process-output-stream proc))
+	  (error (ccl::external-process-error-stream proc)))
+     (unwind-protect
+	  (loop while (trivial-shell::process-alive-p proc) do
+	       (progn
+		 (sleep 5)
+		 (loop for line = (read-line out nil)
+		    while line
+		    do (print line))))
+       (close out)
+       (close error))))
+
 (defun extract-term-list (data)
   (typecase data
     (hash-table (cars (hash-items data)))

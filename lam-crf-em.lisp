@@ -16,12 +16,12 @@
 
 (defparameter *result-filename* "~/temp/crf-result")
 
-(defun run-crf-em (template &optional (iterations 10))
+(defun run-crf-em (template &optional (iterations 10) (half nil))
   "Assume topics, all messages, and umls ngrams.  Returns model file."
   (init-ngrams) (init-messages)
   (print "Training Seed Model and Dataset")
   (let ((crf-seed-hash (crf-train-and-classify template nil *result-filename* 
-					       :c-param 0.25)))
+					       :c-param 0.5 :all nil :half half)))
     (values (iterate-crf-em template crf-seed-hash :iterations iterations)
 	    *model-filename*)))
 
@@ -32,20 +32,25 @@
 	  (*model-filename* (format nil "~~/temp/crf-model-~A.dat" i)))
       (declare (special *training-filename* *testing-filename* *model-filename*))
       (format t "Running CRF EM iteration #~A~%" i)
-      (setf labels
-	    (crf-train-and-classify template labels
+      (let ((new-labels (crf-train-and-classify template labels
 				    (iteration-result-filename *result-filename* i)
-				    :all t :c-param 1.0))))
+				    :all t :c-param 0.5)))
+	(print (length (diff-crf-labels labels new-labels)))
+	(setf labels new-labels))))
   labels)
-    
 
-(defun crf-train-and-classify (template priors result-filename &key all c-param)
+
+(defun crf-train-and-classify (template priors result-filename &key all c-param half)
   "Train CRF on positive instances"
   ;; Train model on positive instances
-  (train-lam-crf *all-messages* template *model-filename* *matching-ngrams* 
+  (train-lam-crf (if half (subseq *all-messages* 0 20000)
+		     *all-messages*)
+		 template *model-filename* *matching-ngrams* 
 		 :topics :topics :crf-hash priors :all-p all :c-param c-param)
   ;; Label all data
-  (classify-lam-crf *all-messages* *model-filename* result-filename :topics)
+  (classify-lam-crf (if half (subseq *all-messages* 20000)
+			*all-messages*)
+		    *model-filename* result-filename :topics)
 		    
   ;; Evaluate recall
   ;; (evaluate-labels *matching-ngrams*)
@@ -72,13 +77,20 @@
 ;; Utils and initialization
 ;;
 
-(defun reset-em-data ()
+(defparameter *hand-ngrams*
+  '((88175 TREAT) (152630 4395 TREAT) (152630 38281 TREAT) (593484 TREAT) (7734 TREAT) (593430 SYMP) (714441 SYMP) (586327 SYMP) (82055 COND) (418796 COND) (309797 SYMP) (24933 SYMP) (119829 SYMP) (147726 601621 TREAT) (127893 181687 COND) (418796 138271 COND) (596921 COND) (595517 TREAT) (600193 TREAT) (595490 SYMPT) (191494 595490 SYMPT) (406619 TREAT) (55513 95029 SYMPT) (37090 17999 SYMPT)))
+
+(defparameter *hand-strings*
+  '("oxygen" "lung surgery" "lung transplant" "tx" "exercise" "pneumo" "lung collapse" "wheeze" "asthma" "lam" "chyle" "nausea" "dizziness" "breath execise" "heart disease" "lam cell" "pleurectomy" "rapamycin" "sirolimus" "PFT" "stable PFT" "inhaler" "weight gain" "feel better"))
+
+(defun reset-em-data (&optional umls)
   (setf *all-ngrams* nil)
   (setf *seed-labels* nil)
   (setf *matching-ngrams* nil)
-  (setf umls::*procedures* nil)
-  (setf umls::*symptoms* nil)
-  (setf umls::*condition* nil))
+  (when umls
+    (setf umls::*procedures* nil)
+    (setf umls::*symptoms* nil)
+    (setf umls::*condition* nil)))
 
 (defun init-messages ()
   (unless *all-messages*
@@ -87,9 +99,28 @@
 	  (get-instances-by-class 'message)))
   t)
 
-(defparameter *blacklist*
-  `(,(append (ids-for-tokens '("Release"))
-	     (list 'umls::treat))))
+(defparameter *blacklist* nil)
+
+(defun get-blacklist ()
+  (unless *blacklist*
+    (setf *blacklist*
+	  (list (append (ids-for-tokens '("Release"))
+			(list 'treat))
+		(append (ids-for-tokens '("disease"))
+			(list 'cond))
+		(append (ids-for-tokens '("catch"))
+			(list 'sympt)))))
+  *blacklist*)
+
+(defparameter *whitelist* nil)
+
+(defun get-whitelist ()
+  (unless *whitelist*
+    (setf *whitelist*
+	  (list (append (ids-for-tokens '("oxygen"))
+			(list 'treat))
+		(append (ids-for-tokens '("pneumothorax"))
+			(list 'cond))))))
 
 (defun init-ngrams ()
   (print "Initializing reference data")
@@ -102,34 +133,45 @@
 	   (append umls::*procedures*
 		   umls::*symptoms*
 		   umls::*condition*
-		   (symptom-ngrams 
-		    (get-symptom-classes)))
-	   *blacklist*
+		   (ngrams-as-ids 
+		    (symptom-ngrams 
+		     (get-symptom-classes)))
+		   (get-whitelist))
+	   (get-blacklist)
 	   :test #'equal)))
 
   ;; Compute seed labels
   (init-messages)
   (unless *seed-labels*
-    (print "Computing seed label table from ngrams")
-    (init-messages)
-    (setf *seed-labels* 
-	  (compute-reference-labels *all-messages* *all-ngrams*)))
+    (time 
+     (progn
+       (print "Computing seed label table from ngrams")
+       (init-messages)
+       (setf *seed-labels* 
+	     (compute-reference-labels *all-messages* *all-ngrams*)))))
 
   ;; Compute ngrams from corpus
   (unless *matching-ngrams*
-    (print "Computing ngrams that match in corpus")
-    (setf *matching-ngrams*
-	  (mapcar #'crf-field->ngram 
-		  (remove-duplicates
-		   (flatten (mapcar (f (sentences)
-				      (mapcar #'annotations sentences))
-				    (hash-values *seed-labels*)))))))
+    (time 
+     (progn 
+       (print "Computing ngrams that match in corpus")
+       (setf *matching-ngrams*
+	     (remove-duplicates
+	      (mapcar #'crf-field->ngram 
+		      (flatten (mapcar (f (sentences)
+					 (mapcar #'annotations sentences))
+				       (hash-values *seed-labels*))))
+	      :test #'equalp)))))
   (print "Completed Initialization")
   t)
+
+(defparameter *last-message* nil)
 
 (defun compute-reference-labels (messages ngrams)
   (let ((hash (make-hash-table))
 	(labeler (crf-labeler ngrams)))
+    (awhen (and *last-message* (position *last-message* messages))
+      (setf messages (subseq messages it)))
     (loop for message in messages do
 	 (progn
 	   (loop for sentence in (message-sentences message) do

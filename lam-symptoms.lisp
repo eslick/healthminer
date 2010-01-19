@@ -9,18 +9,30 @@
 	   (drakma:http-request "http://purl.org/obo/owl/SYMP")
 	   (stp:make-builder)))))
 
+(defparameter *symptom-classes* nil)
+
 (defun get-symptom-classes ()
-  (let ((hash (make-hash-table :test #'equal)))
-    (xpath:map-node-set->list
-     (lambda (node)
-       (let ((string (stp:string-value node)))
-	 (setf (gethash (id-for-token string) hash) string)))
-     (xpath:with-namespaces (("owl" "http://www.w3.org/2002/07/owl#")
-			     ("rdfs" "http://www.w3.org/2000/01/rdf-schema#"))
-       (xpath:evaluate 
-	"//owl:Class/rdfs:label"
-	(get-symptom-cxml))))
-    hash))
+  (unless *symptom-classes*
+    (let ((hash (make-hash-table :test #'equal)))
+      (aif (get-symptom-class-file)
+	   (load-symptom-classes-from-file it)
+	   (xpath:map-node-set->list
+	   (lambda (node)
+	     (let ((string (stp:string-value node)))
+	       (setf (gethash (id-for-token string) hash) string)))
+	   (xpath:with-namespaces (("owl" "http://www.w3.org/2002/07/owl#")
+				   ("rdfs" "http://www.w3.org/2000/01/rdf-schema#"))
+	     (xpath:evaluate 
+	      "//owl:Class/rdfs:label"
+	      (get-symptom-cxml)))))
+      (setf *symptom-classes* hash)))
+  *symptom-classes*)
+
+(defun get-symptom-class-file ()
+  nil)
+
+(defun load-symptom-classes-from-file ()
+  nil)
 
 (defun symptom-ngrams (onto-hash)
   (loop for symptom in (hash-values onto-hash)

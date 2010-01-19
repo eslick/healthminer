@@ -21,9 +21,12 @@
   (open-store *listserv-db-spec*)
   (ensure-stopword-hash)
   (get-message-map)
-  (insert-message-topics (get-instances-by-class 'message) 
+  (insert-message-topics (get-instances-by-class 'message)
 			 "/Users/eslick/temp/200topics-full/topic.state")
-  (setf topic-labels (read-topic-label-file "~/temp/200topics-full/topic.labels"))
+  (setf topic-labels (read-topic-label-file "/Users/eslick/temp/200topics-full/topic.labels"))
+;;  (umls::initialize-umls)
+  (init-messages)
+;;  (init-ngrams)
   t)
 
 (defpclass dataset ()
@@ -797,6 +800,11 @@
 ;;; Word distributions
 
 (defparameter *word-counts* nil)
+(defparameter *sorted-word-counts* nil)
+
+(defun get-sorted-word-counts ()
+  (retset *sorted-word-counts*
+	  (sorted-word-counts)))
 
 (defun make-message-word-counts ()
   (let ((hash (make-hash-table :size 100000 :test 'equalp))
@@ -856,17 +864,30 @@
 ;;	(split-sequence:split-sequence #\space (normalize-string text)))
 ;;  hash)
 
-(defun sorted-word-counts (hash &aux pairs)
+(defun sorted-word-counts (&optional (hash *word-counts*) &aux pairs)
   (maphash (lambda (word count)
 	     (when (> count 1)
 	       (push (cons (string-downcase word) count) pairs)))
 	   hash)
   (sort pairs #'> :key #'cdr))
 
+(defun remove-stopwords-from-counts (count-pairs)
+  (filter-if (f (pair) 
+	       (stopword? (id-for-token (first pair))))
+	     count-pairs))
+
 (defun corpus-words (&aux (count 0))
   (map-messages (id rec)
     (incf count (length (mmap-lemmas rec))))
   count)
+
+(defun word-frequency-rank (word)
+  (position word (get-sorted-word-counts) :key #'car :test #'equal))
+
+(defun sorted-word-frequency-rank (unique-words)
+  (let ((pairs (mapcar (f (term) (cons term (word-frequency-rank term))) unique-words)))
+    (setf pairs (remove-if (f (pair) (null (cdr pair))) pairs))
+    (sort pairs #'< :key #'cdr)))
 
 ;;
 ;; PMI within corpus

@@ -86,15 +86,15 @@
 
 (defun umls-isa-hierarchy (ref)
   (if (null ref) nil
-      (let ((rel (umls-get-relation ref "isa")))
+      (let ((rel (umls-get-relations-by-source ref "isa")))
 	(when rel
 	  (cons (umls-semantic-get ref :name)
 		(umls-isa-hierarchy (umls-relation-target rel)))))))
    
 (defun umls-get-relations-by-source (source type)
-  (select-if (umls-semantic-get source :id)
-	     (umls-get-relations type)
-	     :key #'umls-relation-source))
+  (let ((src (umls-semantic-get source :id)))
+    (select-if (f (rel) (eq src (umls-relation-source rel)))
+	       (umls-get-relations type))))
 
 (defun umls-get-relations-by-target (type target)
   (let ((id  (umls-semantic-get target :id)))
@@ -122,8 +122,10 @@
 ;; Fortunately we can do binary searches over files reasonably fast
 
 (defvar *umls-files* nil)
+(defparameter *umls-dir* "/Users/eslick/Work/fbin/data/umls/2009AB")
+(defparameter *umls-sem-dir* "/Users/eslick/Work/fbin/data/umls/semantic")
 
-(defun initialize-umls (umls-dir semantic-dir)
+(defun initialize-umls (&optional (umls-dir *umls-dir*) (semantic-dir *umls-sem-dir*))
   (let* ((umls-path (merge-pathnames (make-pathname :directory umls-dir)))
 	 (umls-base (merge-pathnames (make-pathname :directory '(:relative "META"))
 				     umls-path))
@@ -139,6 +141,7 @@
 	  `((word-idx . ,(make-umls-path umls-base "MRXW_ENG.RRF"))
 	    (norm-word-idx . ,(make-umls-path umls-base "MRXNW_ENG.RRF"))
 	    (concept-type . ,(make-umls-path umls-base "MRSTY.RRF"))
+	    (relations . ,(make-umls-path umls-base "MRREL.RRF"))
 	    (concept-detail . ,(make-umls-path umls-base "MRCONSO.RRF"))
 	    (concept-def . ,(make-umls-path umls-base "MRDEF.RRF"))))
     (load-umls-semantic-net semantic-dir)))
@@ -193,7 +196,6 @@
 	     (umls-concepts-for-type
 	      (umls-semantic-get type :id)))
 	   types)))
-  
 
 (defun concepts->crf-ngrams (label concepts)
   (collect (curry #'concept->crf-ngram label) concepts))
@@ -207,15 +209,20 @@
   (let ((words (extract-words 
 		(mvretn 3 (langutils:tokenize-string 
 			      (string-downcase string))))))
-    (when (<= (length words) 3)
-      (append words (list label)))))
+    (if (>= (length words) 3)
+	(append (subseq words 0 3) (list label))
+	(append words (list label)))))
+
 
 ;;
 ;; UMLS API
 ;;
 
 (defun umls-concepts-for-word (word)
-  (mapcar #'third (umls-term-recs word)))
+  (collect (lambda (r)
+	     (when (equal (first r) "ENG")
+	       (third r)))
+    (umls-term-recs word)))
 
 (defun umls-concept-type (concept)
   (let ((rec (umls-type-rec concept)))
@@ -259,8 +266,41 @@
   (assert (stringp concept-id))
   (first (umls-records-for-term (get-umls-file 'concept-type) 0 concept-id)))
 
+(defun umls-concept-rels (cid)
+  (umls-records-for-term (get-umls-file 'relations) 0 cid))
+
 (defun umls-term-recs (term)
   (umls-records-for-term (get-umls-file 'norm-word-idx) 1 term))
+
+(defun all-relations-on-term (term)
+  (remove-duplicates
+   (mapcan (lambda (cid)
+	     (mapcar #'eighth (umls-concept-rels cid)))
+	   (umls-concepts-for-word term))
+   :test #'equal))
+
+(defun relations-on-term (term &optional type)
+  "Return all the relations matching type for term"
+  (mapcan (lambda (cid)
+	    (collect (lambda (rel)
+		       (if type 
+			   (when (and (equal (eighth rel) type)
+				      (equal (nth 11 rel) "SNOMEDCT"))
+			     rel)
+			   (when (equal (nth 11 rel) "SNOMEDCT")
+			     rel)))
+	      (umls-concept-rels cid)))
+	  (umls-concepts-for-word term)))
+
+(defun relation-summary-on-term (term &optional rel-name)
+  (remove-duplicates
+   (collect (lambda (rel)
+	      (awhen (umls-concept-string (nth 4 rel))
+		(list term rel-name it)))
+     (relations-on-term term rel-name))
+   :test #'equal))
+
+	  
 
 ;;
 ;; UMLS file utilities
