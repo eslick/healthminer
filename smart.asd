@@ -30,7 +30,8 @@
 		 (:file "lam-listserv-mining")
 		 (:file "api")
 		 (:file "lattice")
-		 (:file "acor"))
+		 (:file "acor")
+		 (:file "deident"))
 ;;		 (:file "webtest"))
     :serial t
     :in-order-to ((load-op (compile-op :smart)))
