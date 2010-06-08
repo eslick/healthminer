@@ -8,20 +8,20 @@
   ((url :accessor relative-url :initarg :url :index t)
    (sender :accessor sender :initarg :sender :index t)
    (subject :accessor subject :initarg :subject)
-   (date :accessor date :initarg :date :index t)
+   (date :accessor date :initarg :date :index t :inherit t)
    (udate :accessor udate :derived-fn (lambda (inst)
 					(values (parse-message-time (date inst)) t))
-	  :slot-deps (date))
+	  :slot-deps (date)
+	  :inherit t)
    (body :accessor body :initarg :body)
    (calais :accessor calais :initarg :calais :initform nil)))
    
-
 (defparameter *print-message-body* nil)
 
 (defmethod print-object ((msg message) stream)
-  (with-slots (date sender subject body) msg
+  (with-slots (sender subject body) msg
     (format stream "#<LAM-MSG \"~A\", \"~A\">"
-	    sender date)))
+	    sender (when (slot-boundp msg 'date) (date msg)))))
 
 (defmethod print-message-header (msg &optional (stream t))
   (with-slots (date sender subject body) msg
@@ -151,7 +151,7 @@
 (defun archive-all-messages ()
   (dolist (page (get-archive-pages))
     #+allegro (excl:gc t)
-    (with-transaction (:txn-nowait t :txn-nosync t)
+    (ele:with-transaction (:txn-nowait t :txn-nosync t)
       (dolist (url (get-message-urls page))
 	(archive-message url)))))
 
@@ -174,7 +174,7 @@
     (error "Truncated message body for url: ~A" url))
   (destructuring-bind (date sender subject) 
       (extract-message-headers frame-page)
-    (with-transaction (:txn-nowait t :txn-nosync t)
+    (ele:with-transaction (:txn-nowait t :txn-nosync t)
       (make-instance 'message
 		     :url url
 		     :date date
@@ -275,8 +275,13 @@
 (defparameter *message-recognizers*
   (list (stdutils::make-fmt-recognizer "%a, %d %b %Y %H:%M:%S %Z")))
 
+(define-condition parse-time-error ()
+  ((string :initarg :string :accessor time-string)))
+
 (defun parse-message-time (string)
-  (parse-time-string string  *message-recognizers*))
+  (if (null string)
+      (signal 'parse-time-error :string string)
+      (parse-time-string string  *message-recognizers*)))
 
 ;;
 ;; Extract message text
@@ -346,21 +351,22 @@
        (build-message-map)
        *message-map*))
 
-(defun build-message-map ()
+(defun build-message-map (&optional (class 'message))
   (let ((hash (make-hash-table))
 	(count 0))
+    (setf *message-map* hash)
     (map-class 
      (lambda (message)
        (with-slots (body) message
-	 (let ((vdoc (langutils::vector-tag body)))
+	 (let ((vdoc (langutils::vector-tag (or body ""))))
 	   (setf (gethash (get-message-id message) hash)
 		 (list (mapcar #'get-lemma-for-id (vector-document-words vdoc))
 		       vdoc
 		       (get-extended-chunks vdoc)))))
        (when (= 0 (mod (incf count) 100))
 	 (print count)))
-     'message)
-    (setf *message-map* hash)))
+     class)
+    hash))
 
 ;; LDA topic vector caching 
 
@@ -707,7 +713,7 @@
 (defun annotations-for-phrase (message sphrase &optional filter)
   (let ((start (phrase-start sphrase))
 	(end (phrase-end sphrase)))
-    (with-transaction ()
+    (ele:with-transaction ()
       (select-if (f_ (and (>= (start _) start)
 			  (<= (end _) end)))
 		 (let ((annos (text-annotations message)))

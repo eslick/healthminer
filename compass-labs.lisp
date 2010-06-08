@@ -207,7 +207,7 @@
 ;;
 
 (defun compute-tag-cloud (query &key (max 100) (tags 30))
-  (declare (optimize speed) (safety 0) (debug 0))
+  (declare (optimize speed (safety 0) (debug 0)))
   (let* ((qterms (tweet-features query))
 	 (qdocs (mapcan (f (term) (search-tweet-db term :max max :features t)) qterms))
 	 (chash (make-hash-table :test #'equal)))
@@ -237,7 +237,7 @@
 
 (defun compute-tag-cloud-v1 (query)
   (let ((qterms (tweet-features query))
-	(tweets (sorted-tweets (search-tweet-db query t)))
+	(tweets (sorted-tweets (search-tweet-db query)))
 	(chash (make-hash-table :test #'equal)))
     (mapc (curry2 #'update-tag-counts chash) tweets)
     (top-n (sort (gethash (first qterms) chash)
@@ -265,7 +265,99 @@
        (progn (incf (cdr it)) alist)
        (apush elt 1 alist)))
 
-    
+;;
+;; vBulletin Boards by size
+;;    
+
+;; RSS Reader
 
 
 
+(defparameter *bulletin-boards* nil)
+
+(defun get-bulletin-boards ()
+  (retset *bulletin-boards*
+   (extract-fields 
+    "//owl:Class/rdfs:label"
+    (parse-web-page 
+     "http://rankings.big-boards.com/?filter=vBulletin,all&p=2"))))
+
+(defun extract-fields (xpath chtml)
+  (xpath:map-node-set->list
+   #'identity
+   (xpath:with-namespaces ((nil "http://www.w3.org/1999/xhtml"))
+     (xpath:evaluate xpath chtml))))
+
+(defun fetch-rss (url)
+  (cxml:parse 
+   (get-url url)
+   (stp:make-builder)))
+
+(defun get-url (url)
+  (drakma:http-request url))
+
+;;
+;; Import Profiles
+;;
+
+(defparameter *cloud-profile-db* nil)
+(defparameter *local-profile-db* nil)
+
+(defun profiles-setup ()
+  (push #P"/usr/local/mysql/lib/" clsql-sys:*foreign-library-search-paths*)
+  (setf *cloud-profile-db* (clsql-sys:connect '("ec2-184-72-1-140.us-west-1.compute.amazonaws.com" "userprofile" "root" "root" ) :database-type :mysql))
+  (setf *local-profile-db* (open-store '(:BDB "/Users/eslick/Work/db/profiles/")))
+  (init-langutils))
+
+;; ec2-204-236-195-166.compute-1.amazonaws.com				       
+
+(file-enable-sql-reader-syntax)
+
+(defun get-profile (id)
+  (get-instance-by-value 'profile-msg 'sender id))
+
+(defun profile-tweets (user-id)
+  (select [tweet] :from "tweet" :where [= [user_id] user-id]))
+
+(defun read-profiles-to-memory ()
+  (mapcar (f (profile)
+	    (unless (get-profile (first profile))
+	      (make-profile-from-list profile)))
+	  (select [*] :from ["user_info"])))
+
+
+;;
+;; Profile hack
+;;
+
+(defpclass profile-msg (message)
+  ())
+
+(defmethod print-object ((msg profile-msg) stream)
+  (format stream "#<PROFILE-MSG \"~A\">" (subject msg)))
+
+(defun make-profile (id date name data)
+  (make-instance 'profile-msg :date date :sender id :body data :subject name))
+
+(defun make-profile-from-list (profile)
+  (dbind (user_id user_screen_name realName location description profileimage friendsCount followersCount createdAt &rest ignore) profile
+    (make-profile user_id createdAt user_screen_name 
+		  (concat-words (cons description (profile-tweets user_id))))))
+
+
+;;
+;; Term vectors
+;;
+
+
+
+;;
+;; Mongo
+;;
+
+(defvar *mongo* nil)
+
+(defun launch-mongo ()
+  (if *mongo* (stop-mongo))
+  (setf *mongo* 
+	(mongo :host 

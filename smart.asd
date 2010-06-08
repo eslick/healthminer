@@ -28,12 +28,15 @@
 		 (:file "lam-crf-fields")
 		 (:file "lam-crf-em")
 		 (:file "lam-listserv-mining")
-		 (:file "lam-divisi"))
+		 (:file "api")
+		 (:file "lattice")
+		 (:file "acor"))
 ;;		 (:file "webtest"))
     :serial t
     :in-order-to ((load-op (compile-op :smart)))
     :depends-on (:stdutils :cl-json :hunchentoot :drakma :elephant :langutils :f-underscore
-			   :trivial-shell :cxml :cxml-stp :cffi :closure-html))
+			   :trivial-shell :cxml :cxml-stp :cffi :closure-html
+			   :clsql))
 
 (defsystem #:smart-explorer    
     :description "SMART: Semantic Manipulation, Analytics, Reporting and Terms"

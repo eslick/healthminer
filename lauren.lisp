@@ -165,6 +165,8 @@
 
 ;; causality utils
 
+(defparameter *context-size* 40)
+
 (defun make-chunk (n text)
  (loop for i from 0 to (- *context-size* 1) with sentences do
       (push (nth (+ n i) text) sentences)

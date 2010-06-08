@@ -68,6 +68,7 @@
 	  collect (progn ,@body)))))
 
 (defun extract-sentence-windows (vdoc size)
+  (declare (optimize (speed 3) (safety 1)))
   (remove-nulls
    (loop 
       with sentences = (document-sentence-phrases vdoc)
@@ -82,7 +83,7 @@
 ;;	    (document-sentence-phrases vdoc))))
 
 (defun document-sentence-phrases (vdoc)
-;;  (declare (optimize (speed 1) (safety 3)))
+  (declare (optimize (speed 3) (safety 1)))
   (labels ((plen (start end)
 	     (declare (type fixnum start end))
 	     (min (1+ (- (or end (length (vector-document-words vdoc))) start))
@@ -126,8 +127,8 @@
 	  (push window windows)
 	  (when (= 0 (mod (length windows) 500)) (print (length windows)))
 	  (when (and stop-at (eq stop-at (length windows)))
-	    (throw 'terminate nil))))))
-    windows)
+	    (throw 'terminate nil)))))
+    windows))
 
 ;; ============================
 ;; Extract lexical windows
@@ -806,7 +807,7 @@
   (retset *sorted-word-counts*
 	  (sorted-word-counts)))
 
-(defun make-message-word-counts ()
+(defun make-message-word-counts (&optional (class 'message))
   (let ((hash (make-hash-table :size 100000 :test 'equalp))
 	(count 0))
     (setf *word-counts* hash)
@@ -814,7 +815,7 @@
 		 (count-words (body inst) hash)
 		 (when (= 0 (mod (incf count) 100))
 		   (print count)))
-	       'message)
+	       class)
     hash))
 
 (defun normalize-string (string)
@@ -956,7 +957,7 @@
 				   sentence bayes fspace))))
     (make-sentence-classifier :feature-space fspace :classifier bayes)))
 
-(defun message-sentences (message &optional (size 2))
+(defmethod message-sentences ((message message) &optional (size 2))
   (flatten (extract-sentence-windows (message-doc message) size)))
 
 (defun message-sentence-strings (message)

@@ -22,7 +22,7 @@
   (cond ((eq type :lda)
 	 (shell-call 
 ;;	 (trivial-shell:shell-command
-	  (format nil "~A train-topics --input ~A --num-topics ~A --num-iterations ~A --output-state ~A --output-topic-keys ~A --num-top-words 100 --inferencer-filename ~A --num-threads 2" ;; --optimize-interval 10"
+	  (format nil "~A train-topics --input ~A --num-topics ~A --num-iterations ~A --output-state ~A --output-topic-keys ~A --num-top-words 100 --inferencer-filename ~A --num-threads 2 --optimize-interval 10"
 		  *mallet-path* mallet-name num-topics iterations 
 		  state-name keys-name inferencer-name)))
 	((eq type :ngram)
@@ -61,12 +61,12 @@
 	      
 	      (cleaned-divisi-tokens (message-words message)))))
 
-(defun mallet-quick-run (messages iterations &key (dump t) sentencesp (type :lda))
+(defun mallet-quick-run (messages topics iterations &key (dump t) sentencesp (type :lda))
   (declare (ignore sentencesp))
   (run-mallet messages 
 	      "/Users/eslick/temp/topic.raw"
 	      "/Users/eslick/temp/topic.mallet"
-	      200
+	      topics
 	      iterations
 	      "/Users/eslick/temp/topic.state.gz"
 	      "/Users/eslick/temp/topic.keys"
@@ -79,27 +79,36 @@
 ;;
 
 (defun read-key-file (filename)
+  "Read mallet key file, returns hash table of lists containing
+   words, alpha parameter, and an empty title"
   (let ((hash (make-hash-table :test #'equal)))
     (with-open-file (stream filename)
       (loop for line = (read-line stream nil)
 	   do (if (null line)
 		  (return hash)
-		  (destructuring-bind (id alpha &rest words) 
+		  (destructuring-bind (id alpha &rest words)
 		      (extract-words line)
 		    (setf (gethash (parse-integer id) hash)
-			  (cons words (parse-number:parse-number alpha)))))))))
+			  (list words 
+				(parse-number:parse-number alpha)
+				""))))))))
 
 (defun terms-in-key-table (terms table)
-  (let ((cats (sort (mapcar #'(lambda (pair)
-				(list (car pair)
-				      (cddr pair)
-				      (cadr pair)))
+  "All topic ids containing the provided terms sorted
+   by their alpha parameter"
+  (let ((cats (sort (mapcar #'(lambda (entry)
+				(list (car entry)
+				      (cddr entry) 
+				      (cadr entry)))
 			    (hash-items table))
 		    #'> :key #'second)))
     (labels ((term-in-table (term)
-	       (loop for cat in cats
+	       (loop 
+		  with topics
+		  for cat in cats
 		  when (member term (third cat) :test #'equal)
-		  return (first cat))))
+		  do (push (first cat) topics)
+		  finally (return (nreverse topics)))))
       (loop 
 	 with matches = nil
 	 for term in (flatten (mapcar #'extract-words terms ))
@@ -108,6 +117,7 @@
 	 finally (return (nreverse matches))))))
 
 (defun read-topic-label-file (filename)
+  ""
   (let ((hash (make-hash-table)))
     (with-open-file (stream filename)
       (do-stream-lines (line stream)

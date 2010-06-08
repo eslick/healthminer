@@ -412,10 +412,6 @@ Expressions are used in Logic, and as actions for agents."
   (maphash #'(lambda (key val) (format stream "~&~A:~10T ~A" key val)) h)
   h)
 
-(defun compose (f g)
-  "Return a function h such that (h x) = (f (g x))."
-  #'(lambda (x) (funcall f (funcall g x))))
-
 (defun invert (f)
   #'(lambda (x) (not (funcall f x))))
 
